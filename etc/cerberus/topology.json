@@ -1,0 +1,115 @@
+{
+    "switch_matrix": {
+        "dp_ids": {
+            "s1": 1,
+            "s2": 2,
+            "s3": 3
+        },
+        "links": [
+            ["s2", "22", "s1", "22"],
+            ["s2", "23", "s3", "23"],
+            ["s3", "22", "s1", "21"]
+        ],
+        "p4": []
+    },
+    "hosts_matrix": [{
+        "name": "MemberA",
+        "interfaces": [{
+            "switch": "s1",
+            "swport": 1,
+            "mac": "00:00:00:00:00:01",
+            "ipv4": "10.0.0.1/24",
+            "ipv6": "2001:db8:32::1/64",
+            "vlan": 1234,
+            "tagged": false
+        }]
+    }, {
+        "name": "MemberB",
+        "interfaces": [{
+            "switch": "s1",
+            "swport": 2,
+            "mac": "00:00:00:00:00:02",
+            "ipv4": "10.0.0.2/24",
+            "ipv6": "2001:db8:32::2/64",
+            "vlan": 1234,
+            "tagged": false
+        }]
+    }, {
+        "name": "MemberC",
+        "interfaces": [{
+            "switch": "s1",
+            "swport": 3,
+            "mac": "00:00:00:00:00:03",
+            "ipv4": "10.0.0.3/24",
+            "ipv6": "2001:db8:32::3/64",
+            "vlan": 1234,
+            "tagged": false
+        }]
+    }, {
+        "name": "MemberD",
+        "interfaces": [{
+            "switch": "s2",
+            "swport": 1,
+            "mac": "00:00:00:00:00:04",
+            "ipv4": "10.0.0.4/24",
+            "ipv6": "2001:db8:32::4/64",
+            "vlan": 1234,
+            "tagged": false
+        }]
+    }, {
+        "name": "MemberE",
+        "interfaces": [{
+            "switch": "s2",
+            "swport": 2,
+            "mac": "00:00:00:00:00:05",
+            "ipv4": "10.0.0.5/24",
+            "ipv6": "2001:db8:32::5/64",
+            "vlan": 1234,
+            "tagged": false
+        }]
+    }, {
+        "name": "MemberF",
+        "interfaces": [{
+            "switch": "s2",
+            "swport": 3,
+            "mac": "00:00:00:00:00:06",
+            "ipv4": "10.0.0.6/24",
+            "ipv6": "2001:db8:32::6/64",
+            "vlan": 1234,
+            "tagged": false
+        }]
+    }, {
+        "name": "MemberG",
+        "interfaces": [{
+            "switch": "s3",
+            "swport": 1,
+            "mac": "00:00:00:00:00:07",
+            "ipv4": "10.0.0.7/24",
+            "ipv6": "2001:db8:32::7/64",
+            "vlan": 1234,
+            "tagged": false
+        }]
+    }, {
+        "name": "MemberH",
+        "interfaces": [{
+            "switch": "s3",
+            "swport": 2,
+            "mac": "00:00:00:00:00:08",
+            "ipv4": "10.0.0.8/24",
+            "ipv6": "2001:db8:32::8/64",
+            "vlan": 1234,
+            "tagged": false
+        }]
+    }, {
+        "name": "MemberI",
+        "interfaces": [{
+            "switch": "s3",
+            "swport": 3,
+            "mac": "00:00:00:00:00:09",
+            "ipv4": "10.0.0.9/24",
+            "ipv6": "2001:db8:32::9/64",
+            "vlan": 1234,
+            "tagged": false
+        }]
+    }]
+}

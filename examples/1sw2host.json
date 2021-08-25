@@ -1,0 +1,34 @@
+{
+    "switch_matrix": {
+        "dp_ids": {
+            "s1": 1
+        },
+        "links": [
+            ["s1", "24", "s2", "24"]
+        ],
+        "p4": []
+    },
+    "hosts_matrix": [{
+        "name": "MemberA",
+        "interfaces": [{
+            "switch": "s1",
+            "swport": 1,
+            "mac": "00:00:00:00:00:01",
+            "ipv4": "10.0.0.1/24",
+            "ipv6": "2001:db8:32::1/64",
+            "vlan": 1234,
+            "tagged": false
+        }]
+    }, {
+        "name": "MemberB",
+        "interfaces": [{
+            "switch": "s1",
+            "swport": 2,
+            "mac": "00:00:00:00:00:02",
+            "ipv4": "10.0.0.2/24",
+            "ipv6": "2001:db8:32::2/64",
+            "vlan": 1234,
+            "tagged": false
+        }]
+    }]
+}
