@@ -1,5 +1,7 @@
 """ Proactive layer 2 Openflow Controller """
 
+from ast import Return
+from itertools import filterfalse
 import logging
 import json
 import os
@@ -42,7 +44,8 @@ class cerberus(app_manager.RyuApp):
     def get_config_file(self, config_file=DEFAULT_CONFIG):
         """ Reads config file from file and checks it's validity """
         config = self.open_config_file(config_file)
-        check_config = self.check_config(config)
+        if not self.check_config(config):
+            sys.exit()
 
     def open_config_file(self, config_file):
         """ Reads the config """
@@ -74,32 +77,32 @@ class cerberus(app_manager.RyuApp):
                 raise ConfigError(f"{err_msg}No 'hosts_matrix' found\n")
         except ConfigError as err:
             self.logger.error(err)
-            sys.exit()
-        self.check_hosts_config(config["hosts_matrix"])
-        self.check_switch_config(config["switch_matrix"])
+            return False
+        if not self.check_hosts_config(config["hosts_matrix"]):
+            return False
+        if not self.check_switch_config(config["switch_matrix"]):
+            return False
+        return True
 
     def check_hosts_config(self, host_matrix):
         """ Parses and validates the hosts matrix """
         err_msg = ("Malformed config detected in the hosts section!\n" +
                    "Please check the config:\n")
-        if not host_matrix:
-            self.logger.error(f"{err_msg} hosts_matrix doesn't have any" +
-                              " content\n")
-
-        for host in host_matrix:
-            malformed = False
-            if "name" not in host:
-                self.logger.error(f"{err_msg} Entry detected without a name\n")
-                malformed = True
-
-            if "interfaces" not in host:
-                self.logger.error(f"{err_msg} Entry detected without " +
-                                  " any interfaces\n")
-                malformed = True
-            if malformed:
-                sys.exit()
-
-            self.check_host_interfaces(err_msg, host)
+        try:
+            if not host_matrix:
+                raise ConfigError(f"{err_msg} hosts matrix is empty")
+            for host in host_matrix:
+                if "name" not in host:
+                    raise ConfigError(f"{err_msg} Host doesn't have a name")
+                if "interfaces" not in host:
+                    raise ConfigError(f"{err_msg} Host has no interfaces")
+                if not self.check_host_interfaces(err_msg, host):
+                    return False
+            return True
+        except ConfigError as err:
+            self.logger.error(err)
+            return False
+        
 
     def check_host_interfaces(self, err_msg, host):
         """ Parse and validates the host's interfaces """
@@ -111,15 +114,16 @@ class cerberus(app_manager.RyuApp):
 
             for iface in host["interfaces"]:
                 if "swport" not in iface:
-                    raise ConfigError(f"{err_msg}. It does not have a " +
-                                      "switch port\n")
+                    raise ConfigError(f"{err_msg}. It has no switch port\n")
                 if "switch" not in iface:
                     raise ConfigError(f"{err_msg}. It does not have an " +
                                       "assigned switch\n")
                 if "ipv4" in iface:
-                    self.check_ipv4_address(err_msg, iface["ipv4"])
+                    if not self.check_ipv4_address(err_msg, iface["ipv4"]):
+                        return False
                 if "ipv6" in iface:
-                    self.check_ipv6_address(err_msg, iface["ipv6"])
+                    if not self.check_ipv6_address(err_msg, iface["ipv6"]):
+                        return False
                 if "ipv4" not in iface and "ipv6" not in iface:
                     raise ConfigError(f"{err_msg}. It has neither an IPv4" +
                                       " or IPv6 address\n")
@@ -127,14 +131,16 @@ class cerberus(app_manager.RyuApp):
                     iface["mac"] = \
                         self.check_for_available_mac(err_msg, iface,
                                                      host["interfaces"])
-                if "mac" in iface:
-                    self.check_mac_address(err_msg, iface["mac"])
+                if not self.check_mac_address(err_msg, iface["mac"]):
+                    return False
                 if "vlan" in iface:
-                    self.check_vlan_validity(err_msg, iface["vlan"])
+                    if not self.check_vlan_validity(err_msg, iface["vlan"]):
+                        return False
+            return True
 
         except ConfigError as err:
             self.logger.error(err)
-            sys.exit()
+            return False
 
     def check_ipv4_address(self, err_msg, v4_address):
         """ Checks validity of ipv4 address """
@@ -145,9 +151,10 @@ class cerberus(app_manager.RyuApp):
             if "." not in v4_address or "/" not in v4_address:
                 raise ConfigError(f"{err_msg} in the ipv4 section. " +
                                   f"IPv4 address: {v4_address}")
+            return True
         except ConfigError as err:
             self.logger.error(err)
-            sys.exit()
+            return False
 
     def check_ipv6_address(self, err_msg, v6_address):
         """ Checks validity of ipv6 address """
@@ -158,9 +165,10 @@ class cerberus(app_manager.RyuApp):
             if ":" not in v6_address or "/" not in v6_address:
                 raise ConfigError(f"{err_msg} in the ipv6 section. " +
                                   f"IPv6 address: {v6_address}")
+            return True
         except ConfigError as err:
             self.logger.error(err)
-            sys.exit()
+            return False
 
     def check_mac_address(self, err_msg, mac_address):
         """ Checks validity of MAC address """
@@ -172,12 +180,13 @@ class cerberus(app_manager.RyuApp):
                 raise ConfigError(f"{err_msg} in the MAC section. Currently " +
                                   "only : seperated addresses are supported\n" +
                                   f"MAC Address: {mac_address}\n")
+            return True
         except ConfigError as err:
             self.logger.error(err)
-            sys.exit()
+            return False
 
     def check_for_available_mac(self, err_msg, iface, host_interfaces):
-        """ Checks if port another mac address is assigned to the port """
+        """ Checks port if another mac address is assigned to the port """
         mac = ""
         try:
             for other_iface in host_interfaces:
@@ -195,6 +204,7 @@ class cerberus(app_manager.RyuApp):
                                   "No mac address was provided")
         except ConfigError as err:
             self.logger.error(err)
+            return None
 
         return mac
 
@@ -206,9 +216,10 @@ class cerberus(app_manager.RyuApp):
                 raise ConfigError(f"{err_msg}. Invalid vlan id(vid) detected" +
                                   "Vid should be between 1 and 4095. " +
                                   f"Vid: {vid} detected\n")
+            return True
         except (ConfigError, ValueError) as err:
             self.logger.error(err)
-            sys.exit()
+            return False
 
     def check_switch_config(self, sw_matrix):
         """ Parses and validates the switch matrix """
@@ -227,14 +238,15 @@ class cerberus(app_manager.RyuApp):
             if "unmanaged_switches" in sw_matrix:
                 self.unmanaged_switches = sw_matrix["unmanaged_switches"]
             self.link_matrix = sw_matrix["links"]
+            return True
 
         except ConfigError as err:
             self.logger.error(err)
-            sys.exit()
+            return False
         except ValueError as err:
             self.logger.error(f"{err_msg} Please check value of port numbers")
             self.logger.error(err)
-            sys.exit()
+            return False
 
     def check_dp_ids(self, sw_matrix, err_msg):
         """ Checks if the dp id section is valid in the  """
