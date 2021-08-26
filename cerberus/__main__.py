@@ -17,7 +17,7 @@ def parse_args(sys_args):
     """
 
     args = argparse.ArgumentParser(
-        prog="cerberus-controller",
+        prog="cerberus",
         description="Proactive layer 2 Openflow Controller"
     )
     args.add_argument(
@@ -45,7 +45,7 @@ def parse_args(sys_args):
 
 
 def print_version():
-    version = VersionInfo('cerberus-controller')
+    version = VersionInfo('cerberus')
     print(f"Cerberus {version}")
     sys.exit()
 
@@ -57,7 +57,7 @@ def main():
     if args.version:
         print_version()
     
-    os.execvp('ryu-manager', ['cerberus.cerberus'])
+    os.execvp('ryu-manager', ['ryu-manager', "cerberus.cerberus"])
 
 
 if __name__ == '__main__':
