@@ -1,5 +1,8 @@
 CHANGES
 =======
 
+* Seperate parser to it's own file
+* Cleaned up config parser
+* Ported config parser from Athos
 * Initial setup
 * Initial commit
