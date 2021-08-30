@@ -48,15 +48,77 @@ class cerberus(app_manager.RyuApp):
         """ Reads config file from file and checks it's validity """
         # TODO: Get config file from env if set
         config = self.open_config_file(config_file)
+        self.logger.info("Checking config file")
         if not Validator().check_config(config, self.logname):
             sys.exit()
         links, p4_switches, switches, group_links = Parser(self.logname).parse_config(config)
+        parsed_config = {   "links": links, 
+                            "p4_switches": p4_switches, 
+                            "switches": switches, 
+                            "group_links": group_links}
+        return parsed_config
         
     @set_ev_cls(dpset.EventDP, dpset.DPSET_EV_DISPATCHER)
     def datapath_connection_handler(self, ev):
         """ Handles connecting to switches """
+        dp_id = self.format_dpid(ev.dp.id)
         if ev.enter:
-            self.logger.info(f'Datapath: {ev.dp.id}\t found')
+            self.logger.info(f'Datapath: {dp_id} found')
+
+            if self.datapath_to_be_configured(dp_id):
+                self.logger.info(f"Datapath: {dp_id} configuring")
+                self.send_flow_stats_request(ev.dp)
+
+    def sw_already_configured(self, datapath):
+        """ Helper to pull switch state and see if it has already been configured """
+        pass
+
+
+    def send_flow_stats_request(self, datapath):
+        ofp_parser = datapath.ofproto_parser
+        req = ofp_parser.OFPFlowStatsRequest(datapath)
+        datapath.send_msg(req)
+
+
+    @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
+    def flow_stats_reply_handler(self, ev):
+        flows = []
+        self.logger.info(ev.msg.body)
+        for stat in ev.msg.body:
+            flows.append('table_id=%s '
+                        'duration_sec=%d duration_nsec=%d '
+                        'priority=%d '
+                        'idle_timeout=%d hard_timeout=%d flags=0x%04x '
+                        'cookie=%d packet_count=%d byte_count=%d '
+                        'match=%s instructions=%s' %
+                        (stat.table_id,
+                        stat.duration_sec, stat.duration_nsec,
+                        stat.priority,
+                        stat.idle_timeout, stat.hard_timeout, stat.flags,
+                        stat.cookie, stat.packet_count, stat.byte_count,
+                        stat.match, stat.instructions))
+        self.logger.info('FlowStats: %s', flows)
+
+
+    def first_time_sw_setup(self, datapath):
+        """ Sets up the switch for the first time """
+        pass
+
+
+    def update_sw(self, datapath):
+        """ Helper to get rules and update the rules on the switch """
+        pass
+
+
+    def datapath_to_be_configured(self, dp_id):
+        """ Checks if the datapath needs to be configured """
+        for sw in self.config['switches']:
+            if dp_id == self.config['switches'][sw]['dp_id']:
+                return True
+        
+        self.logger.error(f'Datapath: {dp_id}\t has not been configured.')
+        return False
+
 
     def open_config_file(self, config_file):
         """ Reads the config """
@@ -77,6 +139,9 @@ class cerberus(app_manager.RyuApp):
 
         return data
 
+    def format_dpid(self, dp_id):
+        """ Formats dp id to hex for consistency """
+        return hex(dp_id)
 
     def setup_logger(self, loglevel=logging.INFO,
                      logfile=DEFAULT_LOG_FILE, quiet=False):
