@@ -118,47 +118,138 @@ class cerberus(app_manager.RyuApp):
         for switch in self.config['switches']:
             print(f"Printing  switch: {switch}")
             if self.format_dpid(dp_id) != self.config['switches'][switch]['dp_id']:
+                # self.setup_rules_to_other_switches(datapath, switch)
                 continue
             for port, hosts in self.config['switches'][switch]['hosts'].items():
                 for host in hosts:
+                    host_name = host['name']
+                    mac = host['mac']
+                    vlan_id = host['vlan'] if 'vlan' in host else None
+                    tagged = host['tagged'] if 'tagged' in host else None
+                    ipv4 = host['ipv4'] if 'ipv4' in host else None
+                    ipv6 = host['ipv6'] if 'ipv6' in host else None
                     self.logger.info(f"Datapath: {dp_id}\tConfiguring host: " +
-                                     f"{host['name']} on port: {port}")
-                    self.logger.debug(f"Datapath: {dp_id}\t host: "+ 
-                                      f"{host['name']} has mac: {host['mac']}" +
-                                      f"\tvlan: {host['vlan']}\ttagged: " + 
-                                      f"{host['tagged']}")
+                                     f"{host_name} on port: {port}")
+                    self.logger.debug(f"Datapath: {dp_id}\t host: {host_name} "+
+                                      f"has mac: {mac}\tvlan: {vlan_id}\t" + 
+                                      f"tagged: {tagged}\tipv4: {ipv4}\t" + 
+                                      f"ipv6: {ipv6}")
                     self.add_in_flow(port, datapath, host['mac'], 
                                      host['vlan'], host['tagged'])
+                    self.setup_flows_for_direct_connect(datapath, port, 
+                                                        host_name, mac, vlan_id,
+                                                        tagged, ipv4, ipv6)
         
+
+    def setup_flows_for_direct_connect(self, datapath, port, host_name, mac, 
+                                       vlan_id, tagged, ipv4, ipv6):
+        """ Sets up the flows for hosts directly connected to the switch """
+        # dp_id = datapath.id
+        self.add_direct_mac_flow(datapath, host_name, mac, vlan_id, 
+                                 tagged, port)
+        self.add_direct_ipv4_flow(datapath, host_name, mac, ipv4, vlan_id, 
+                                  tagged, port)
+        self.add_direct_ipv6_flow(datapath, host_name, mac, ipv6, vlan_id,
+                                  tagged, port)
+        pass
+
+    def add_direct_mac_flow(self, datapath, host_name, mac, vid, tagged, port,
+                            priority=DEFAULT_PRIORITY, cookie=DEFAULT_COOKIE):
+        """ Add mac flow for directly connected host """
+        ofproto_parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto
+        actions = []
+        match = ofproto_parser.OFPMatch(in_port=port, 
+                                        vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+                                        eth_dst=mac)
+        if not tagged:
+            actions.append(ofproto_parser.OFPActionPopVlan())
+        actions.append(ofproto_parser.OFPActionOutput(port))
+        instructions = [ofproto_parser.OFPInstructionActions(
+                            ofproto.OFPIT_APPLY_ACTIONS,
+                            actions)]
+        
+        self.logger.info("Adding mac flow")
+        self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
+
+
+    def add_direct_ipv4_flow(self, datapath, host_name, mac, ipv4, vid, tagged, 
+                             port, priority=DEFAULT_PRIORITY, 
+                             cookie=DEFAULT_COOKIE):
+        """ Add ipv4 arp rule for directly connected host """
+        ofproto_parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto
+        actions = []
+        match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+                                        eth_type=ether_types.ETH_TYPE_ARP,
+                                        arp_tpa=self.clean_ip_address(ipv4))
+        if not tagged:
+            actions.append(ofproto_parser.OFPActionPopVlan())
+        actions.append(ofproto_parser.OFPActionSetField(eth_dst=mac))
+        actions.append(ofproto_parser.OFPActionOutput(port))
+        
+        instructions = [ofproto_parser.OFPInstructionActions(
+                            ofproto.OFPIT_APPLY_ACTIONS,
+                            actions)]
+        self.logger.info("Adding ipv4 flow")
+        self.logger.info(f"host_name: {host_name} {instructions} {match}")
+        self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
+
+
+    def add_direct_ipv6_flow(self, datapath, host_name, mac, ipv6, vid, tagged, 
+                             port, priority=DEFAULT_PRIORITY, 
+                             cookie=DEFAULT_COOKIE):
+        """ Add ipv6 arp rule for directly connected host """
+        ofproto_parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto
+        actions = []
+        # "icmpv6_type": 135, "ip_proto": 58, "eth_type": 34525
+        match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+                                    icmpv6_type=135, ip_proto=58, 
+                                    eth_type=34525, 
+                                    ipv6_nd_target=self.clean_ip_address(ipv6))
+        if not tagged:
+            actions.append(ofproto_parser.OFPActionPopVlan())
+        actions.append(ofproto_parser.OFPActionSetField(eth_dst=mac))
+        actions.append(ofproto_parser.OFPActionOutput(port))
+        
+        instructions = [ofproto_parser.OFPInstructionActions(
+                            ofproto.OFPIT_APPLY_ACTIONS,
+                            actions)]
+        self.logger.info("Adding ipv6 flow")
+        self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
+
 
     def add_in_flow(self, port, datapath, mac=None, vlan=None, tagged=False, 
                     priority=DEFAULT_PRIORITY, cookie=DEFAULT_COOKIE):
         """ Constructs flow for in table """
-        parser = datapath.ofproto_parser
+        ofproto_parser = datapath.ofproto_parser
         ofproto = datapath.ofproto
         match = None
         actions = []
         if mac:
             if tagged:
-                match = parser.OFPMatch(in_port=port, 
-                                        vlan_vid=(ofproto.OFPVID_PRESENT | vlan),
-                                        eth_src=mac)
+                match = ofproto_parser.OFPMatch(in_port=port, 
+                            vlan_vid=(ofproto.OFPVID_PRESENT | vlan),
+                            eth_src=mac)
             else:
-                match = parser.OFPMatch(in_port=port, eth_src=mac)
+                match = ofproto_parser.OFPMatch(in_port=port, eth_src=mac)
                 tag_vlan_actions = [
-                    parser.OFPActionPushVlan(),
-                    parser.OFPActionSetField(vlan_vid=(ofproto.OFPVID_PRESENT | vlan))]
+                    ofproto_parser.OFPActionPushVlan(),
+                    ofproto_parser.OFPActionSetField(
+                        vlan_vid=(ofproto.OFPVID_PRESENT | vlan))]
 
-                instructions = parser.OFPInstructionActions(
-                    ofproto.OFPIT_APPLY_ACTIONS,
-                    tag_vlan_actions)
+                instructions = ofproto_parser.OFPInstructionActions(
+                                    ofproto.OFPIT_APPLY_ACTIONS,
+                                    tag_vlan_actions)
                 actions.append(instructions)
         else:
-            match = parser.OFPMatch(in_port=port)
-        actions.append(parser.OFPInstructionGotoTable(OUT_TABLE))
-        self.add_flow(datapath, priority, match, actions, IN_TABLE, cookie)
+            match = ofproto_parser.OFPMatch(in_port=port)
+        actions.append(ofproto_parser.OFPInstructionGotoTable(OUT_TABLE))
+        self.add_flow(datapath, match, actions, IN_TABLE, cookie, priority)
 
-    def add_flow(self, datapath, priority, match, actions, table, cookie=DEFAULT_COOKIE):
+    def add_flow(self, datapath, match, actions, table, cookie=DEFAULT_COOKIE, 
+                 priority=DEFAULT_PRIORITY):
         """ Helper to a flow to the switch """
         parser = datapath.ofproto_parser
         flow_mod = parser.OFPFlowMod(datapath=datapath, match=match, 
@@ -193,6 +284,13 @@ class cerberus(app_manager.RyuApp):
                                              out_group=ofproto.OFPG_ANY
                                              )
         datapath.send_msg(flow_mod)
+
+    def clean_ip_address(self, address):
+        """ Cleans address if an address range is found """
+        if "/" in address:
+            clean_address = address.split('/')[0]
+            return clean_address
+        return address
 
     def open_config_file(self, config_file):
         """ Reads the config """
