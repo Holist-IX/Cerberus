@@ -1,15 +1,20 @@
 """ Proactive layer 2 Openflow Controller """
 
+from array import array
+from ast import Dict
+from collections import defaultdict
 import logging
 import json
 import os
 import sys
+from tokenize import Number
+from urllib import request
 
 from cerberus.config_parser import Validator, Parser
 from cerberus.exceptions import *
 from pbr.version import VersionInfo
 from ryu.base import app_manager
-from ryu.controller import ofp_event, dpset
+from ryu.controller import ofp_event, dpset, controller
 from ryu.controller.handler import MAIN_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, ether_types, vlan
@@ -106,19 +111,18 @@ class cerberus(app_manager.RyuApp):
     def full_sw_setup(self, datapath):
         """ Sets up the switch for the first time """
         dp_id = datapath.id
-        self.setup_in_table(datapath)
-        # self.setup_out_table(datapath)
-        # self.setup_groups(datapath)
+        self.setup_groups(datapath)
+        self.setup_sw_hosts(datapath)
         self.logger.info(f"Datapath: {dp_id} configured")
-        pass
 
-    def setup_in_table(self, datapath):
+    def setup_sw_hosts(self, datapath):
         """ Sets up the in table for the datapath """
         dp_id = datapath.id
         for switch in self.config['switches']:
             print(f"Printing  switch: {switch}")
             if self.format_dpid(dp_id) != self.config['switches'][switch]['dp_id']:
-                # self.setup_rules_to_other_switches(datapath, switch)
+                group_id = self.config['switches'][switch]['dp_id']
+                self.setup_flows_for_not_direct_connections(datapath, switch, int(group_id))
                 continue
             for port, hosts in self.config['switches'][switch]['hosts'].items():
                 for host in hosts:
@@ -134,12 +138,10 @@ class cerberus(app_manager.RyuApp):
                                       f"has mac: {mac}\tvlan: {vlan_id}\t" + 
                                       f"tagged: {tagged}\tipv4: {ipv4}\t" + 
                                       f"ipv6: {ipv6}")
-                    self.add_in_flow(port, datapath, host['mac'], 
-                                     host['vlan'], host['tagged'])
+                    self.add_in_flow(port, datapath, mac, vlan_id, tagged)
                     self.setup_flows_for_direct_connect(datapath, port, 
                                                         host_name, mac, vlan_id,
                                                         tagged, ipv4, ipv6)
-        
 
     def setup_flows_for_direct_connect(self, datapath, port, host_name, mac, 
                                        vlan_id, tagged, ipv4, ipv6):
@@ -151,7 +153,95 @@ class cerberus(app_manager.RyuApp):
                                   tagged, port)
         self.add_direct_ipv6_flow(datapath, host_name, mac, ipv6, vlan_id,
                                   tagged, port)
-        pass
+
+
+    def setup_flows_for_not_direct_connections(self, datapath, switch, group_id):
+        """ Sets up the flows for hosts not directly connected to the switch """
+
+        for _, hosts in self.config['switches'][switch]['hosts'].items():
+                for host in hosts:
+                    host_name = host['name']
+                    mac = host['mac']
+                    vlan_id = host['vlan'] if 'vlan' in host else None
+                    ipv4 = host['ipv4'] if 'ipv4' in host else None
+                    ipv6 = host['ipv6'] if 'ipv6' in host else None
+                    self.add_indirect_mac_flow(datapath, host_name, mac, 
+                                               vlan_id, group_id)
+                    self.add_indirect_ipv4_flow(datapath, host_name, mac, ipv4,
+                                                vlan_id, group_id)
+                    self.add_indirect_ipv6_flow(datapath, host_name, mac, ipv6, 
+                                                vlan_id, group_id)
+
+    def setup_groups(self, datapath):
+        """ Initial setup of the groups on the switch """
+        isolated_switches = Parser(self.logname).find_isolated_switches(self.config['group_links'])
+        group_links = self.config['group_links']
+        switches = self.config['switches']
+        links = self.config['links']
+        
+        for sw in group_links:
+            self.setup_core_in_table(datapath, sw)
+            if sw in isolated_switches:
+                for other_sw in [s for s in group_links if s == sw]:
+                    group_id = int(switches[other_sw]['dp_id'])
+                    link = self.config['group_links'][sw]
+                    self.build_group(datapath, link, int(group_id))
+                continue
+            for other_sw, details in switches.items():
+                if other_sw == sw:
+                    continue
+                target_dp_id = details['dp_id']
+                if target_dp_id in group_links[sw]:
+                    sw_link = group_links[sw][target_dp_id]
+                    l = [sw, sw_link['main'],
+                            sw_link['other_sw'], sw_link['other_port']]
+                    new_links = self.remove_old_link_for_ff(l, links)
+
+                    self.find_group_rule(datapath, new_links, sw, sw_link, 
+                                            other_sw, group_links, target_dp_id)
+                else:
+                    route = self.find_route(links, sw, other_sw)
+                    
+                    if route:
+                        sw_link = group_links[sw][target_dp_id]
+                        next_hop_id = switches[route[1]]['dp_id']
+                        out_port = group_links[sw][next_hop_id]['main']
+                        group_links[sw][target_dp_id] = { 
+                            "main": out_port,
+                            "other_sw": route[1],
+                            "other_port": group_links[sw][next_hop_id]['other_port']
+                        }
+                        new_links = list(links)
+
+                        li = [sw, group_links[sw][target_dp_id]['main'],
+                              group_links[sw][target_dp_id]['other_sw'],
+                              group_links[sw][target_dp_id]['other_port']]
+                        
+                        new_links = self.remove_old_link_for_ff(li, links)
+
+                        self.find_group_rule(datapath, new_links, sw, sw_link, 
+                                             other_sw, group_links, target_dp_id)
+
+
+    def build_group(self, datapath: controller.Datapath, link: dict, group_id):
+        """ build the groups rule to send to the switch """
+        ofproto = datapath.ofproto
+        ofproto_parser = datapath.ofproto_parser
+        main_port = int(link['main'])
+        main_actions = [ofproto_parser.OFPActionOutput(main_port)]
+        buckets = [ofproto_parser.OFPBucket(watch_port=main_port, 
+                                            actions=main_actions)]
+        if 'backup' in link:
+            backup_port = int(link['backup'])
+            backup_actions = [ofproto_parser.OFPActionOutput(backup_port)]
+            buckets.append(ofproto_parser.OFPBucket(watch_port=backup_port,
+                                            actions=backup_actions))
+        
+        print(f"Group id = {group_id}")
+        msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_ADD, 
+                                         ofproto.OFPGT_FF, int(group_id), buckets)
+
+        datapath.send_msg(msg)
 
     def add_direct_mac_flow(self, datapath, host_name, mac, vid, tagged, port,
                             priority=DEFAULT_PRIORITY, cookie=DEFAULT_COOKIE):
@@ -159,8 +249,7 @@ class cerberus(app_manager.RyuApp):
         ofproto_parser = datapath.ofproto_parser
         ofproto = datapath.ofproto
         actions = []
-        match = ofproto_parser.OFPMatch(in_port=port, 
-                                        vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+        match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
                                         eth_dst=mac)
         if not tagged:
             actions.append(ofproto_parser.OFPActionPopVlan())
@@ -169,7 +258,6 @@ class cerberus(app_manager.RyuApp):
                             ofproto.OFPIT_APPLY_ACTIONS,
                             actions)]
         
-        self.logger.info("Adding mac flow")
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
 
 
@@ -191,8 +279,6 @@ class cerberus(app_manager.RyuApp):
         instructions = [ofproto_parser.OFPInstructionActions(
                             ofproto.OFPIT_APPLY_ACTIONS,
                             actions)]
-        self.logger.info("Adding ipv4 flow")
-        self.logger.info(f"host_name: {host_name} {instructions} {match}")
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
 
 
@@ -216,7 +302,62 @@ class cerberus(app_manager.RyuApp):
         instructions = [ofproto_parser.OFPInstructionActions(
                             ofproto.OFPIT_APPLY_ACTIONS,
                             actions)]
-        self.logger.info("Adding ipv6 flow")
+        self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
+
+
+    def add_indirect_mac_flow(self, datapath, host_name, mac, vid, group_id, 
+                              priority=DEFAULT_PRIORITY, cookie=DEFAULT_COOKIE):
+        """ Add mac rule for indirectly connected hosts """
+        ofproto_parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto
+        
+        match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+                                        eth_dst=mac)
+
+        instructions = [ofproto_parser.OFPInstructionActions(
+                            ofproto.OFPIT_APPLY_ACTIONS,
+                            [ofproto_parser.OFPActionGroup(group_id)])]
+
+        self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
+
+
+    def add_indirect_ipv4_flow(self, datapath, host_name, mac, ipv4, vid, 
+                               group_id, priority=DEFAULT_PRIORITY, 
+                               cookie=DEFAULT_COOKIE):
+        """ Add ipv4 rule for inderectly connected hosts """
+        ofproto_parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto
+        
+        match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+                                        eth_type=ether_types.ETH_TYPE_ARP,
+                                        arp_tpa=self.clean_ip_address(ipv4))
+
+        instructions = [ofproto_parser.OFPInstructionActions(
+                            ofproto.OFPIT_APPLY_ACTIONS,
+                            [ofproto_parser.OFPActionSetField(eth_dst=mac),
+                             ofproto_parser.OFPActionGroup(group_id)])]
+
+        self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
+
+
+    
+    def add_indirect_ipv6_flow(self, datapath, host_name, mac, ipv6, vid, 
+                               group_id, priority=DEFAULT_PRIORITY, 
+                               cookie=DEFAULT_COOKIE):
+        """ Add ipv6 rule for inderectly connected hosts """
+        ofproto_parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto
+        
+        match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+                                        icmpv6_type=135, ip_proto=58, 
+                                        eth_type=34525, 
+                                        ipv6_nd_target=self.clean_ip_address(ipv6))
+
+        instructions = [ofproto_parser.OFPInstructionActions(
+                            ofproto.OFPIT_APPLY_ACTIONS,
+                            [ofproto_parser.OFPActionSetField(eth_dst=mac),
+                             ofproto_parser.OFPActionGroup(group_id)])]
+
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
 
 
@@ -263,13 +404,59 @@ class cerberus(app_manager.RyuApp):
         """ Helper to get rules and update the rules on the switch """
         pass
 
+    def remove_old_link_for_ff(self, link_to_remove, links):
+        """ Removes a local link to generate a topology with that link down and 
+            determine which paths to take for redundancy """
+        new_links = list(links)
+        if link_to_remove in new_links:
+            new_links.remove(link_to_remove)
+            return new_links
+        li = [link_to_remove[2], link_to_remove[3], 
+              link_to_remove[0], link_to_remove[1]]
+        try:
+            new_links.remove(li)
+        except:
+            self.logger.error("Error trying to remove link from the core.")
+            self.logger.error(f"Link to remove: {str(link_to_remove)}")
+            self.logger.error(f"Link Array: {str(links)}")
+        return new_links
+
+
+    def find_group_rule(self, datapath, links, sw, sw_link, target_sw, 
+                        group_links, group_id):
+        """ Find the path between 2 switches and create links for them """
+        route = self.find_route(links, sw, target_sw)
+        if route:
+            backup = [v['main'] for k,v in group_links[sw].items() if route[1] == v['other_sw']]
+            sw_link['backup'] = str(backup[0])
+
+        self.build_group(datapath, sw_link, group_id)
+
+
+    def find_route(self, links, source_sw, target_sw):
+        """ Helper method to return a route between two switches """
+        link_nodes = self.spf_organise(links)
+        spfgraph = Graph()
+        for node in link_nodes:
+            spfgraph.add_edge(*node)
+        route = self.dijkstra(spfgraph, source_sw, target_sw)
+        return route
+
+
+    def setup_core_in_table(self, datapath, switch):
+        """ Initial setup flows for in table """
+        for _, link in self.config['group_links'][switch].items():
+            port = int(link['main'])
+            self.add_in_flow(datapath=datapath, port=port)
+
+
     def datapath_to_be_configured(self, dp_id):
         """ Checks if the datapath needs to be configured """
         for sw in self.config['switches']:
             if dp_id == self.config['switches'][sw]['dp_id']:
                 return True
 
-        self.logger.error(f'Datapath: {dp_id}\t has not been configured.')
+        self.logger.warning(f'Datapath: {dp_id}\t has not been configured.')
         return False
 
 
@@ -312,8 +499,8 @@ class cerberus(app_manager.RyuApp):
         return data
 
     def format_dpid(self, dp_id):
-        """ Formats dp id to hex for consistency """
-        return hex(dp_id)
+        """ Formats dp id to int for consistency """
+        return int(dp_id)
 
     def setup_logger(self, loglevel=logging.INFO,
                      logfile=DEFAULT_LOG_FILE, quiet=False):
@@ -329,3 +516,76 @@ class cerberus(app_manager.RyuApp):
         logger.setLevel(loglevel)
 
         return logger
+
+
+    def spf_organise(self, links):
+        """ Organises the links so that can be used for the shortest path """
+        link_nodes = []
+        for link in links:
+            cost = 1000
+            link_nodes.append([link[0], link[2], cost])
+        return link_nodes
+
+
+    def dijkstra(self, graph, initial, end):
+        """ Dijkstra's algorithm used to determine shortest path """
+        # shortest paths is a dict of nodes
+        # whose value is a tuple of (previous node, weight)
+        shortest_paths = {initial: (None, 0)}
+        current_node = initial
+        visited = set()
+
+        while current_node != end:
+            visited.add(current_node)
+            destinations = graph.edges[current_node]
+            weight_to_current_node = shortest_paths[current_node][1]
+
+            for next_node in destinations:
+                weight = graph.weights[(
+                    current_node, next_node)] + weight_to_current_node
+                if next_node not in shortest_paths:
+                    shortest_paths[next_node] = (current_node, weight)
+                else:
+                    current_shortest_weight = shortest_paths[next_node][1]
+                    if current_shortest_weight > weight:
+                        shortest_paths[next_node] = (current_node, weight)
+
+            next_destinations = {
+                node: shortest_paths[node] for node in shortest_paths
+                if node not in visited}
+            if not next_destinations:
+                return None
+            # next node is the destination with the lowest weight
+            current_node = min(next_destinations,
+                               key=lambda k: next_destinations[k][1])
+
+        # Work back through destinations in shortest path
+        path = []
+        while current_node is not None:
+            path.append(current_node)
+            next_node = shortest_paths[current_node][0]
+            current_node = next_node
+        # Reverse path
+        path = path[::-1]
+        return path
+
+class Graph():
+    """ Graphs all possible next nodes from a node """
+    def __init__(self):
+        """
+        self.edges is a dict of all possible next nodes
+        e.g. {'X': ['A', 'B', 'C', 'E'], ...}
+        self.weights has all the weights between two nodes,
+        with the two nodes as a tuple as the key
+        e.g. {('X', 'A'): 7, ('X', 'B'): 2, ...}
+        """
+        self.edges = defaultdict(list)
+        self.weights = {}
+
+    def add_edge(self, from_node, to_node, weight):
+        """ Adds a new edge to existing node """
+        # Note: assumes edges are bi-directional
+        self.edges[from_node].append(to_node)
+        self.edges[to_node].append(from_node)
+        self.weights[(from_node, to_node)] = weight
+        self.weights[(to_node, from_node)] = weight

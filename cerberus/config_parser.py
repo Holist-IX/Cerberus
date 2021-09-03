@@ -144,7 +144,7 @@ class Validator():
                             "Please specify dp_ids to communicate with")
         else:
             for _, dp_id in sw_matrix["dp_ids"].items():
-                if not hex(dp_id):
+                if not int(dp_id):
                     raise ConfigError(f"{err_msg}Please ensure that dp_ids are"+ 
                                       f" valid numbers.\n dp_id found: {dp_id}")
 
@@ -176,7 +176,7 @@ class Validator():
 
     def check_port_number(self, port, err_msg):
         """ Checks if the port is a number """
-        if type(port) != int or type(port) != hex:
+        if type(port) != int or type(port) != int:
             int(port)            
             if type(port) != int:
                 ValueError(f"{err_msg} Port must be a number.\n" + 
@@ -189,7 +189,7 @@ class Validator():
 
 class Parser():
 
-    def __init__(self, logname):
+    def __init__(self, logname='parser'):
         self.logger = self.get_logger(logname)
 
     
@@ -307,8 +307,8 @@ class Parser():
 
 
     def format_dpid(self, dp_id):
-        """ Formats dp id to hex for consistency """
-        return hex(dp_id)
+        """ Formats dp id to int for consistency """
+        return int(dp_id)
 
     def get_logger(self, logname):
         """ Retrieve logger """
