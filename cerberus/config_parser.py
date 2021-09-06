@@ -1,10 +1,11 @@
 """ Config parser for Cerberus """
 
-from curses import longname
 import logging
-from tabnanny import check
+import json
+import hashlib
 
 from cerberus.exceptions import *
+from collections import OrderedDict
 
 class Validator():
 
@@ -304,6 +305,14 @@ class Parser():
             member['vlan'] = iface['vlan']
             member['tagged'] = iface['tagged']
         return member
+
+
+    def get_hash(self, config):
+        """ Stores the config as a hash, for quick comparisons """
+        sorted_config =  sorted(config)
+        config_serialized = json.dumps(sorted_config)
+        hashed_config = hashlib.sha256(config_serialized.encode())
+        return hashed_config.hexdigest()
 
 
     def format_dpid(self, dp_id):
