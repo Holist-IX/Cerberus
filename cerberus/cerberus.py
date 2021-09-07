@@ -1,14 +1,10 @@
 """ Proactive layer 2 Openflow Controller """
 
-from array import array
-from ast import Dict
 from collections import defaultdict
 import logging
 import json
 import os
 import sys
-from tokenize import Number
-from urllib import request
 
 from cerberus.config_parser import Validator, Parser
 from cerberus.exceptions import *
@@ -33,10 +29,10 @@ DEFAULT_COOKIE = 525033
 FLOW_NOT_FOUND = 0
 FLOW_EXISTS = 1
 FLOW_TO_UPDATE = 2
-
+FLOW_OLD_DELETE = 3
 
 class cerberus(app_manager.RyuApp):
-    """ A RyuApp for proactively configuring layer 2 switches 
+    """ A RyuApp for proactively configuring layer 2 switches
 
     Cerberus removes MAC learning from the switching fabric for networks where
     the topologies are known in advanced
@@ -97,12 +93,16 @@ class cerberus(app_manager.RyuApp):
         conf_parser = Parser(self.logname)
         dp_id = datapath.id
         sw_name = self.config['dp_id_to_sw_name'][dp_id]
-        for port, hosts in self.config['switches'][sw_name]['hosts'].items():
-            print(port)
-            print(hosts)
-            for host in hosts:
-                self.check_if_host_in_flows(datapath, host, port, flows, direct=True)
-        
+
+        for switch in self.config['switches']:
+            group_id = None
+            if switch != sw_name:
+                group_id = self.config['switches'][switch]['dp_id']
+            for port, hosts in self.config['switches'][switch]['hosts'].items():
+                for host in hosts:
+                    flows = self.check_if_host_in_flows(datapath, host,
+                                                        port, flows, group_id)
+
 
 
     def send_flow_stats_request(self, datapath):
@@ -111,7 +111,7 @@ class cerberus(app_manager.RyuApp):
         req = ofp_parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(req)
 
-    @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
+    @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER) #type: ignore
     def flow_stats_reply_handler(self, ev):
         flows = []
         dp: controller.Datapath
@@ -131,7 +131,7 @@ class cerberus(app_manager.RyuApp):
             #               stat.idle_timeout, stat.hard_timeout, stat.flags,
             #               stat.cookie, stat.packet_count, stat.byte_count,
             #               stat.match, stat.instructions))
-            flow = {"table_id": stat.table_id, "match": stat.match, 
+            flow = {"table_id": stat.table_id, "match": stat.match,
                     "instructions": stat.instructions, "cookie": stat.cookie}
             flows.append(flow)
         self.logger.info(f"Datapath: {dp_id}\t FlowStats: {flows}")
@@ -141,7 +141,7 @@ class cerberus(app_manager.RyuApp):
             self.full_sw_setup(dp)
         else:
             self.sw_already_configured(dp, flows)
-        
+
 
     def full_sw_setup(self, datapath):
         """ Sets up the switch for the first time """
@@ -170,21 +170,21 @@ class cerberus(app_manager.RyuApp):
                     self.logger.info(f"Datapath: {dp_id}\tConfiguring host: " +
                                      f"{host_name} on port: {port}")
                     self.logger.debug(f"Datapath: {dp_id}\t host: {host_name} "+
-                                      f"has mac: {mac}\tvlan: {vlan_id}\t" + 
-                                      f"tagged: {tagged}\tipv4: {ipv4}\t" + 
+                                      f"has mac: {mac}\tvlan: {vlan_id}\t" +
+                                      f"tagged: {tagged}\tipv4: {ipv4}\t" +
                                       f"ipv6: {ipv6}")
                     self.add_in_flow(port, datapath, mac, vlan_id, tagged)
-                    self.setup_flows_for_direct_connect(datapath, port, 
+                    self.setup_flows_for_direct_connect(datapath, port,
                                                         host_name, mac, vlan_id,
                                                         tagged, ipv4, ipv6)
 
-    def setup_flows_for_direct_connect(self, datapath, port, host_name, mac, 
+    def setup_flows_for_direct_connect(self, datapath, port, host_name, mac,
                                        vlan_id, tagged, ipv4, ipv6):
         """ Sets up the flows for hosts directly connected to the switch """
         # dp_id = datapath.id
-        self.add_direct_mac_flow(datapath, host_name, mac, vlan_id, 
+        self.add_direct_mac_flow(datapath, host_name, mac, vlan_id,
                                  tagged, port)
-        self.add_direct_ipv4_flow(datapath, host_name, mac, ipv4, vlan_id, 
+        self.add_direct_ipv4_flow(datapath, host_name, mac, ipv4, vlan_id,
                                   tagged, port)
         self.add_direct_ipv6_flow(datapath, host_name, mac, ipv6, vlan_id,
                                   tagged, port)
@@ -200,11 +200,11 @@ class cerberus(app_manager.RyuApp):
                     vlan_id = host['vlan'] if 'vlan' in host else None
                     ipv4 = host['ipv4'] if 'ipv4' in host else None
                     ipv6 = host['ipv6'] if 'ipv6' in host else None
-                    self.add_indirect_mac_flow(datapath, host_name, mac, 
+                    self.add_indirect_mac_flow(datapath, host_name, mac,
                                                vlan_id, group_id)
                     self.add_indirect_ipv4_flow(datapath, host_name, mac, ipv4,
                                                 vlan_id, group_id)
-                    self.add_indirect_ipv6_flow(datapath, host_name, mac, ipv6, 
+                    self.add_indirect_ipv6_flow(datapath, host_name, mac, ipv6,
                                                 vlan_id, group_id)
 
     def setup_groups(self, datapath):
@@ -213,14 +213,14 @@ class cerberus(app_manager.RyuApp):
         group_links = self.config['group_links']
         switches = self.config['switches']
         links = self.config['links']
-        
+
         for sw in group_links:
             self.setup_core_in_table(datapath, sw)
             if sw in isolated_switches:
                 for other_sw in [s for s in group_links if s == sw]:
                     group_id = int(switches[other_sw]['dp_id'])
                     link = self.config['group_links'][sw]
-                    self.build_group(datapath, link, int(group_id))
+                    self.add_group(datapath, link, int(group_id))
                 continue
             for other_sw, details in switches.items():
                 if other_sw == sw:
@@ -232,16 +232,16 @@ class cerberus(app_manager.RyuApp):
                             sw_link['other_sw'], sw_link['other_port']]
                     new_links = self.remove_old_link_for_ff(l, links)
 
-                    self.find_group_rule(datapath, new_links, sw, sw_link, 
+                    self.find_group_rule(datapath, new_links, sw, sw_link,
                                             other_sw, group_links, target_dp_id)
                 else:
                     route = self.find_route(links, sw, other_sw)
-                    
+
                     if route:
                         sw_link = group_links[sw][target_dp_id]
                         next_hop_id = switches[route[1]]['dp_id']
                         out_port = group_links[sw][next_hop_id]['main']
-                        group_links[sw][target_dp_id] = { 
+                        group_links[sw][target_dp_id] = {
                             "main": out_port,
                             "other_sw": route[1],
                             "other_port": group_links[sw][next_hop_id]['other_port']
@@ -251,53 +251,62 @@ class cerberus(app_manager.RyuApp):
                         li = [sw, group_links[sw][target_dp_id]['main'],
                               group_links[sw][target_dp_id]['other_sw'],
                               group_links[sw][target_dp_id]['other_port']]
-                        
                         new_links = self.remove_old_link_for_ff(li, links)
 
-                        self.find_group_rule(datapath, new_links, sw, sw_link, 
+                        self.find_group_rule(datapath, new_links, sw, sw_link,
                                              other_sw, group_links, target_dp_id)
 
 
-    def build_group(self, datapath: controller.Datapath, link: dict, group_id):
-        """ build the groups rule to send to the switch """
+    def add_group(self, datapath: controller.Datapath, link, group_id):
+        """ Helper to build group and add the group to the datapath """
+        ofproto: ofproto_v1_3
         ofproto = datapath.ofproto
+        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser = datapath.ofproto_parser
+        buckets = self.build_group_buckets(datapath, link)
+        msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_ADD,
+                                         ofproto.OFPGT_FF, int(group_id),
+                                         buckets)
+        datapath.send_msg(msg)
+
+
+    def build_group_buckets(self, datapath: controller.Datapath, link: dict):
+        """ build the groups rule to send to the switch """
+        ofproto_parser: ofproto_v1_3_parser
         ofproto_parser = datapath.ofproto_parser
         main_port = int(link['main'])
         main_actions = [ofproto_parser.OFPActionOutput(main_port)]
-        buckets = [ofproto_parser.OFPBucket(watch_port=main_port, 
+        buckets = [ofproto_parser.OFPBucket(watch_port=main_port,
                                             actions=main_actions)]
         if 'backup' in link:
             backup_port = int(link['backup'])
             backup_actions = [ofproto_parser.OFPActionOutput(backup_port)]
             buckets.append(ofproto_parser.OFPBucket(watch_port=backup_port,
                                             actions=backup_actions))
-        
-        print(f"Group id = {group_id}")
-        msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_ADD, 
-                                         ofproto.OFPGT_FF, int(group_id), buckets)
-
-        datapath.send_msg(msg)
+        return buckets
 
     def add_direct_mac_flow(self, datapath, host_name, mac, vid, tagged, port,
                             priority=DEFAULT_PRIORITY, cookie=DEFAULT_COOKIE):
         """ Add mac flow for directly connected host """
-        ofproto_parser = datapath.ofproto_parser
-        ofproto = datapath.ofproto
-        actions = []
-        match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
-                                        eth_dst=mac)
-        if not tagged:
-            actions.append(ofproto_parser.OFPActionPopVlan())
-        actions.append(ofproto_parser.OFPActionOutput(port))
-        instructions = [ofproto_parser.OFPInstructionActions(
-                            ofproto.OFPIT_APPLY_ACTIONS,
-                            actions)]
-        
+        # ofproto_parser = datapath.ofproto_parser
+        # ofproto = datapath.ofproto
+        # actions = []
+        # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+        #                                 eth_dst=mac)
+        # if not tagged:
+        #     actions.append(ofproto_parser.OFPActionPopVlan())
+        # actions.append(ofproto_parser.OFPActionOutput(port))
+        # instructions = [ofproto_parser.OFPInstructionActions(
+        #                     ofproto.OFPIT_APPLY_ACTIONS,
+        #                     actions)]
+
+        match, instructions = self.build_direct_mac_flow_out(datapath, mac, vid,
+                                                             tagged, port)
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
 
 
-    def build_direct_mac_flow_out(self, datapath: controller.Datapath, mac, vid, 
-                                  tagged, port, priority=DEFAULT_PRIORITY):
+    def build_direct_mac_flow_out(self, datapath: controller.Datapath, mac, vid,
+                                  tagged, port):
         """ Builds match and instructions for the out table for mac of hosts
             that are directly connected """
         ofproto: ofproto_v1_3
@@ -316,11 +325,10 @@ class cerberus(app_manager.RyuApp):
         instructions = [ofproto_parser.OFPInstructionActions(
                             ofproto.OFPIT_APPLY_ACTIONS,
                             actions)]
-        
         return match, instructions
 
-    def build_direct_mac_flow_in(self, datapath: controller.Datapath, mac, vid, 
-                              tagged, port, priority=DEFAULT_PRIORITY):
+    def build_direct_mac_flow_in(self, datapath: controller.Datapath, mac, vid,
+                                 tagged, port):
         """ Builds match and instructions for the in table for mac of hosts that
             are directly connected"""
         ofproto: ofproto_v1_3
@@ -330,7 +338,7 @@ class cerberus(app_manager.RyuApp):
         match = None
         instructions = []
         if tagged:
-            match = ofproto_parser.OFPMatch(in_port=port, 
+            match = ofproto_parser.OFPMatch(in_port=port,
                         vlan_vid=(ofproto.OFPVID_PRESENT | vid),
                         eth_src=mac)
         else:
@@ -344,18 +352,40 @@ class cerberus(app_manager.RyuApp):
                                 ofproto.OFPIT_APPLY_ACTIONS,
                                 tag_vlan_actions)
             instructions.append(actions)
-        
         instructions.append(ofproto_parser.OFPInstructionGotoTable(OUT_TABLE))
-        
+
         return match, instructions
 
 
-    def add_direct_ipv4_flow(self, datapath, host_name, mac, ipv4, vid, tagged, 
-                             port, priority=DEFAULT_PRIORITY, 
+    def add_direct_ipv4_flow(self, datapath, host_name, mac, ipv4, vid, tagged,
+                             port, priority=DEFAULT_PRIORITY,
                              cookie=DEFAULT_COOKIE):
         """ Add ipv4 arp rule for directly connected host """
-        ofproto_parser = datapath.ofproto_parser
+        # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+        #                                 eth_type=ether_types.ETH_TYPE_ARP,
+        #                                 arp_tpa=self.clean_ip_address(ipv4))
+        # if not tagged:
+        #     actions.append(ofproto_parser.OFPActionPopVlan())
+        # actions.append(ofproto_parser.OFPActionSetField(eth_dst=mac))
+        # actions.append(ofproto_parser.OFPActionOutput(port))
+
+        # instructions = [ofproto_parser.OFPInstructionActions(
+        #                     ofproto.OFPIT_APPLY_ACTIONS,
+        #                     actions)]
+        match, instructions = self.build_direct_ipv4_out(datapath, mac, ipv4,
+                                                         vid, tagged, port)
+        self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
+
+
+    def build_direct_ipv4_out(self, datapath: controller.Datapath, mac, ipv4,
+                              vid, tagged, port):
+        """ Builds match and instructions for the in table for ipv4 of hosts
+            that are directly connected"""
+        ofproto: ofproto_v1_3
         ofproto = datapath.ofproto
+        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser = datapath.ofproto_parser
+        match = None
         actions = []
         match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
                                         eth_type=ether_types.ETH_TYPE_ARP,
@@ -364,58 +394,82 @@ class cerberus(app_manager.RyuApp):
             actions.append(ofproto_parser.OFPActionPopVlan())
         actions.append(ofproto_parser.OFPActionSetField(eth_dst=mac))
         actions.append(ofproto_parser.OFPActionOutput(port))
-        
         instructions = [ofproto_parser.OFPInstructionActions(
                             ofproto.OFPIT_APPLY_ACTIONS,
                             actions)]
+
+        return match, instructions
+
+
+    def add_direct_ipv6_flow(self, datapath, host_name, mac, ipv6, vid, tagged,
+                             port, priority=DEFAULT_PRIORITY,
+                             cookie=DEFAULT_COOKIE):
+        """ Add ipv6 arp rule for directly connected host """
+        # ofproto_parser = datapath.ofproto_parser
+        # ofproto = datapath.ofproto
+        # actions = []
+        # # "icmpv6_type": 135, "ip_proto": 58, "eth_type": 34525
+        # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+        #                             icmpv6_type=135, ip_proto=58,
+        #                             eth_type=34525,
+        #                             ipv6_nd_target=self.clean_ip_address(ipv6))
+        # if not tagged:
+        #     actions.append(ofproto_parser.OFPActionPopVlan())
+        # actions.append(ofproto_parser.OFPActionSetField(eth_dst=mac))
+        # actions.append(ofproto_parser.OFPActionOutput(port))
+
+        # instructions = [ofproto_parser.OFPInstructionActions(
+        #                     ofproto.OFPIT_APPLY_ACTIONS,
+        #                     actions)]
+
+        match, instructions = self.build_direct_ipv6_out(datapath, mac, ipv6,
+                                                         vid, tagged, port)
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
 
 
-    def add_direct_ipv6_flow(self, datapath, host_name, mac, ipv6, vid, tagged, 
-                             port, priority=DEFAULT_PRIORITY, 
-                             cookie=DEFAULT_COOKIE):
-        """ Add ipv6 arp rule for directly connected host """
-        ofproto_parser = datapath.ofproto_parser
+    def build_direct_ipv6_out(self, datapath: controller.Datapath, mac, ipv6,
+                              vid, tagged, port):
+        """ Builds the match and instructions for IPv6 flows of hosts that are
+            are directly connected """
+        ofproto: ofproto_v1_3
         ofproto = datapath.ofproto
+        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser = datapath.ofproto_parser
+        match = None
         actions = []
         # "icmpv6_type": 135, "ip_proto": 58, "eth_type": 34525
         match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
-                                    icmpv6_type=135, ip_proto=58, 
-                                    eth_type=34525, 
+                                    icmpv6_type=135, ip_proto=58,
+                                    eth_type=34525,
                                     ipv6_nd_target=self.clean_ip_address(ipv6))
         if not tagged:
             actions.append(ofproto_parser.OFPActionPopVlan())
         actions.append(ofproto_parser.OFPActionSetField(eth_dst=mac))
         actions.append(ofproto_parser.OFPActionOutput(port))
-        
+
         instructions = [ofproto_parser.OFPInstructionActions(
                             ofproto.OFPIT_APPLY_ACTIONS,
                             actions)]
-        self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
+        return match, instructions
 
 
-    def add_indirect_mac_flow(self, datapath, host_name, mac, vid, group_id, 
+    def add_indirect_mac_flow(self, datapath, host_name, mac, vid, group_id,
                               priority=DEFAULT_PRIORITY, cookie=DEFAULT_COOKIE):
         """ Add mac rule for indirectly connected hosts """
-        ofproto_parser = datapath.ofproto_parser
-        ofproto = datapath.ofproto
-        
-        match, instructions = self.build_indirect_mac_flow_out(datapath, mac, 
+        match, instructions = self.build_indirect_mac_flow_out(datapath, mac,
                                                           vid, group_id)
-
         # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
         #                                 eth_dst=mac)
 
         # instructions = [ofproto_parser.OFPInstructionActions(
         #                     ofproto.OFPIT_APPLY_ACTIONS,
         #                     [ofproto_parser.OFPActionGroup(group_id)])]
-
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
 
 
-    def build_indirect_mac_flow_out(self, datapath: controller.Datapath, mac, 
+    def build_indirect_mac_flow_out(self, datapath: controller.Datapath, mac,
                                     vid, group_id):
-        """ Builds the flow and instructions for mac flows of hosts 
+        """ Builds the flow and instructions for mac flows of hosts
             inderectly connected """
         ofproto: ofproto_v1_3
         ofproto = datapath.ofproto
@@ -430,16 +484,39 @@ class cerberus(app_manager.RyuApp):
         instructions = [ofproto_parser.OFPInstructionActions(
                             ofproto.OFPIT_APPLY_ACTIONS,
                             [ofproto_parser.OFPActionGroup(group_id)])]
-
         return match, instructions
 
-    def add_indirect_ipv4_flow(self, datapath, host_name, mac, ipv4, vid, 
-                               group_id, priority=DEFAULT_PRIORITY, 
+
+    def add_indirect_ipv4_flow(self, datapath, host_name, mac, ipv4, vid,
+                               group_id, priority=DEFAULT_PRIORITY,
                                cookie=DEFAULT_COOKIE):
         """ Add ipv4 rule for inderectly connected hosts """
-        ofproto_parser = datapath.ofproto_parser
+        # ofproto_parser = datapath.ofproto_parser
+        # ofproto = datapath.ofproto
+
+        # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+        #                                 eth_type=ether_types.ETH_TYPE_ARP,
+        #                                 arp_tpa=self.clean_ip_address(ipv4))
+
+        # instructions = [ofproto_parser.OFPInstructionActions(
+        #                     ofproto.OFPIT_APPLY_ACTIONS,
+        #                     [ofproto_parser.OFPActionSetField(eth_dst=mac),
+        #                      ofproto_parser.OFPActionGroup(group_id)])]
+
+        match, instructions = self.build_indirect_ipv4_out(datapath, mac, ipv4,
+                                                           vid, group_id)
+        self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
+
+
+    def build_indirect_ipv4_out(self, datapath: controller.Datapath, mac, ipv4,
+                                vid, group_id):
+        ofproto: ofproto_v1_3
         ofproto = datapath.ofproto
-        
+        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser = datapath.ofproto_parser
+        match = None
+        instructions = []
+
         match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
                                         eth_type=ether_types.ETH_TYPE_ARP,
                                         arp_tpa=self.clean_ip_address(ipv4))
@@ -448,21 +525,45 @@ class cerberus(app_manager.RyuApp):
                             ofproto.OFPIT_APPLY_ACTIONS,
                             [ofproto_parser.OFPActionSetField(eth_dst=mac),
                              ofproto_parser.OFPActionGroup(group_id)])]
+        return match, instructions
 
+
+    def add_indirect_ipv6_flow(self, datapath, host_name, mac, ipv6, vid,
+                               group_id, priority=DEFAULT_PRIORITY,
+                               cookie=DEFAULT_COOKIE):
+        """ Add ipv6 rule for inderectly connected hosts """
+        # ofproto_parser = datapath.ofproto_parser
+        # ofproto = datapath.ofproto
+
+        # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
+        #                                 icmpv6_type=135, ip_proto=58,
+        #                                 eth_type=34525,
+        #                                 ipv6_nd_target=self.clean_ip_address(ipv6))
+
+        # instructions = [ofproto_parser.OFPInstructionActions(
+        #                     ofproto.OFPIT_APPLY_ACTIONS,
+        #                     [ofproto_parser.OFPActionSetField(eth_dst=mac),
+        #                      ofproto_parser.OFPActionGroup(group_id)])]
+
+        match, instructions = self.build_indirect_ipv6_out(datapath, mac, ipv6,
+                                                           vid, group_id)
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
 
 
-    
-    def add_indirect_ipv6_flow(self, datapath, host_name, mac, ipv6, vid, 
-                               group_id, priority=DEFAULT_PRIORITY, 
-                               cookie=DEFAULT_COOKIE):
-        """ Add ipv6 rule for inderectly connected hosts """
-        ofproto_parser = datapath.ofproto_parser
+    def build_indirect_ipv6_out(self, datapath: controller.Datapath, mac, ipv6,
+                                vid, group_id):
+        """ Builds the match and instructions for IPv6 flows of hosts that are
+            are directly connected """
+        ofproto: ofproto_v1_3
         ofproto = datapath.ofproto
-        
+        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser = datapath.ofproto_parser
+        match = None
+        instructions = []
+
         match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
-                                        icmpv6_type=135, ip_proto=58, 
-                                        eth_type=34525, 
+                                        icmpv6_type=135, ip_proto=58,
+                                        eth_type=34525,
                                         ipv6_nd_target=self.clean_ip_address(ipv6))
 
         instructions = [ofproto_parser.OFPInstructionActions(
@@ -470,10 +571,10 @@ class cerberus(app_manager.RyuApp):
                             [ofproto_parser.OFPActionSetField(eth_dst=mac),
                              ofproto_parser.OFPActionGroup(group_id)])]
 
-        self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
+        return match, instructions
 
 
-    def add_in_flow(self, port, datapath, mac=None, vlan=None, tagged=False, 
+    def add_in_flow(self, port, datapath, mac=None, vlan=None, tagged=False,
                     priority=DEFAULT_PRIORITY, cookie=DEFAULT_COOKIE):
         """ Constructs flow for in table """
         ofproto_parser = datapath.ofproto_parser
@@ -482,7 +583,7 @@ class cerberus(app_manager.RyuApp):
         actions = []
         if mac:
             # if tagged:
-            #     match = ofproto_parser.OFPMatch(in_port=port, 
+            #     match = ofproto_parser.OFPMatch(in_port=port,
             #                 vlan_vid=(ofproto.OFPVID_PRESENT | vlan),
             #                 eth_src=mac)
             # else:
@@ -496,22 +597,50 @@ class cerberus(app_manager.RyuApp):
             #                         ofproto.OFPIT_APPLY_ACTIONS,
             #                         tag_vlan_actions)
             #     actions.append(instructions)
-            match, actions = self.build_direct_mac_flow_in(datapath, mac, vlan, 
-                                                           tagged, port, 
-                                                           priority)
+            match, actions = self.build_direct_mac_flow_in(datapath, mac, vlan,
+                                                           tagged, port)
         else:
             match = ofproto_parser.OFPMatch(in_port=port)
             actions.append(ofproto_parser.OFPInstructionGotoTable(OUT_TABLE))
         self.add_flow(datapath, match, actions, IN_TABLE, cookie, priority)
 
-    def add_flow(self, datapath, match, actions, table, cookie=DEFAULT_COOKIE, 
+    def add_flow(self, datapath, match, actions, table, cookie=DEFAULT_COOKIE,
                  priority=DEFAULT_PRIORITY):
         """ Helper to a flow to the switch """
         parser = datapath.ofproto_parser
-        flow_mod = parser.OFPFlowMod(datapath=datapath, match=match, 
-                                     instructions=actions, table_id=table, 
+        flow_mod = parser.OFPFlowMod(datapath=datapath, match=match,
+                                     instructions=actions, table_id=table,
                                      priority=priority, cookie=cookie)
-        
+        datapath.send_msg(flow_mod)
+
+
+    def remove_flow(self, datapath, match, instructions, table_id):
+        """ Helper to remove a particular rule from the datapath """
+        ofproto: ofproto_v1_3
+        ofproto = datapath.ofproto
+        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser = datapath.ofproto_parser
+
+        flow_mod = ofproto_parser.OFPFlowMod(datapath=datapath,
+                                             command=ofproto.OFPFC_DELETE,
+                                             table_id=table_id,
+                                             match=match,
+                                             instructions=instructions)
+        datapath.send_msg(flow_mod)
+
+
+    def update_flow(self, datapath, match, instructions, table_id):
+        """ Helper to update a rule on the datapath """
+        ofproto: ofproto_v1_3
+        ofproto = datapath.ofproto
+        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser = datapath.ofproto_parser
+
+        flow_mod = ofproto_parser.OFPFlowMod(datapath=datapath,
+                                             command=ofproto.OFPFC_MODIFY,
+                                             table_id=table_id,
+                                             match=match,
+                                             instructions=instructions)
         datapath.send_msg(flow_mod)
 
 
@@ -520,13 +649,13 @@ class cerberus(app_manager.RyuApp):
         pass
 
     def remove_old_link_for_ff(self, link_to_remove, links):
-        """ Removes a local link to generate a topology with that link down and 
+        """ Removes a local link to generate a topology with that link down and
             determine which paths to take for redundancy """
         new_links = list(links)
         if link_to_remove in new_links:
             new_links.remove(link_to_remove)
             return new_links
-        li = [link_to_remove[2], link_to_remove[3], 
+        li = [link_to_remove[2], link_to_remove[3],
               link_to_remove[0], link_to_remove[1]]
         try:
             new_links.remove(li)
@@ -537,7 +666,7 @@ class cerberus(app_manager.RyuApp):
         return new_links
 
 
-    def find_group_rule(self, datapath, links, sw, sw_link, target_sw, 
+    def find_group_rule(self, datapath, links, sw, sw_link, target_sw,
                         group_links, group_id):
         """ Find the path between 2 switches and create links for them """
         route = self.find_route(links, sw, target_sw)
@@ -545,7 +674,7 @@ class cerberus(app_manager.RyuApp):
             backup = [v['main'] for k,v in group_links[sw].items() if route[1] == v['other_sw']]
             sw_link['backup'] = str(backup[0])
 
-        self.build_group(datapath, sw_link, group_id)
+        self.add_group(datapath, sw_link, group_id)
 
 
     def find_route(self, links, source_sw, target_sw):
@@ -579,7 +708,7 @@ class cerberus(app_manager.RyuApp):
         """ Resets the flows on the datapath """
         ofproto = datapath.ofproto
         ofproto_parser = datapath.ofproto_parser
-        flow_mod = ofproto_parser.OFPFlowMod(datapath=datapath, 
+        flow_mod = ofproto_parser.OFPFlowMod(datapath=datapath,
                                              command=ofproto.OFPFC_DELETE,
                                              table_id=ofproto.OFPTT_ALL,
                                              out_port=ofproto.OFPP_ANY,
@@ -587,12 +716,14 @@ class cerberus(app_manager.RyuApp):
                                              )
         datapath.send_msg(flow_mod)
 
+
     def clean_ip_address(self, address):
         """ Cleans address if an address range is found """
         if "/" in address:
             clean_address = address.split('/')[0]
             return clean_address
         return address
+
 
     def open_config_file(self, config_file):
         """ Reads the config """
@@ -613,7 +744,9 @@ class cerberus(app_manager.RyuApp):
 
         return data
 
-    def check_if_host_in_flows(self, datapath, host, port, flows, direct=True):
+
+    def check_if_host_in_flows(self, datapath: controller.Datapath, host, port,
+                               flows, group_id=None):
         """ Helper function to see if a host exists on the switch """
         host_name = host['name']
         mac = host['mac']
@@ -622,57 +755,178 @@ class cerberus(app_manager.RyuApp):
         ipv4 = host['ipv4'] if 'ipv4' in host else None
         ipv6 = host['ipv6'] if 'ipv6' in host else None
 
-        result = self.check_if_mac_flow_exists(datapath, mac, vlan_id, tagged, port, 
-                                               flows, direct)
+        mac_result, flows = self.check_mac_flow_exist(datapath,
+                                        mac, vlan_id, tagged, port,
+                                        flows, group_id)
+        if mac_result == FLOW_NOT_FOUND or mac_result == FLOW_OLD_DELETE:
+            if group_id:
+                self.add_indirect_mac_flow(datapath, host_name, mac,
+                                           vlan_id, group_id)
+            else:
+                self.add_direct_mac_flow(datapath, host_name, mac,
+                                         vlan_id, tagged, port)
+                self.add_in_flow(port, datapath, mac, vlan_id, tagged)
+
+        if ipv4:
+            v4_result, flows = self.check_ipv4_flow_exist(datapath,
+                                                mac, ipv4, vlan_id, tagged,
+                                                port, flows, group_id)
+            if v4_result == FLOW_NOT_FOUND or v4_result == FLOW_OLD_DELETE:
+                if group_id:
+                    self.add_indirect_ipv4_flow(datapath, host_name, mac, ipv4,
+                                                vlan_id, group_id)
+                else:
+                    self.add_direct_ipv4_flow(datapath, host_name, mac, ipv4,
+                                              vlan_id, tagged, port)
+            if v4_result == FLOW_TO_UPDATE:
+                if group_id:
+                    match, inst = self.build_indirect_ipv4_out(datapath, mac,
+                                                        ipv4, vlan_id, group_id)
+                else:
+                    match, inst = self.build_direct_ipv4_out(datapath, mac,
+                                                    ipv4, vlan_id, tagged, port)
+                self.update_flow(datapath, match, inst, OUT_TABLE)
+        if ipv6:
+            v6_result, flows = self.check_ipv6_flow_exist(datapath, mac, ipv6,
+                                        vlan_id, tagged, port, flows, group_id)
+            if v6_result == FLOW_NOT_FOUND or v6_result == FLOW_OLD_DELETE:
+                if group_id:
+                    self.add_indirect_ipv6_flow(datapath, host_name, mac, ipv6,
+                                                vlan_id, group_id)
+                else:
+                    self.add_direct_ipv6_flow(datapath, host_name, mac, ipv6,
+                                              vlan_id, tagged, port)
+            if v6_result == FLOW_TO_UPDATE:
+                if group_id:
+                    match, inst = self.build_indirect_ipv6_out(datapath, mac,
+                                                        ipv6, vlan_id, group_id)
+                else:
+                    match, inst = self.build_direct_ipv6_out(datapath,
+                                            host_name, mac, ipv6, vlan_id, port)
+                    self.update_flow(datapath, match, inst, OUT_TABLE)
+
+        return flows
 
 
-    def check_if_mac_flow_exists(self, datapath, mac, vlan_id, tagged, port, 
-                                 flows, group_id=None):
-        """ Checks to see if the mac address exists in the flow table """
+    def check_ipv6_flow_exist(self, datapath, mac, ipv6, vlan_id, tagged,
+                                  port, flows, group_id=None):
+        """ Checks if the ipv6 address exists in the flow table """
         exists = FLOW_NOT_FOUND
-        if not group_id:
-            in_match, in_inst = self.build_direct_mac_flow_in(datapath, mac, 
-                                                              vlan_id, tagged, 
-                                                              port)
-            in_flows = [f for f in flows if f.table_id == IN_TABLE]
-            exists, flow = self.check_if_flow_and_instructions_match(in_flows, 
-                                                        in_match, in_inst)
-            if exists != FLOW_EXISTS:
-                return exists, flows
-            flows.remove(flow)
-    
-            out_match, out_inst = self.build_direct_mac_flow_out(datapath, mac,
-                                                        vlan_id, tagged, port)
-        else:
-            out_match, out_inst = self.build_indirect_mac_flow_out(datapath, mac,
-                                                            vlan_id, group_id)
-        
-        out_flows = [f for f in flows if f.table_d == OUT_TABLE]
 
-        exists, flow = self.check_if_flow_and_instructions_match(out_flows, 
-                                                        out_match, out_inst)
-        if exists != FLOW_EXISTS:
-            return exists, flows
-        flows.remove(flow)
+        if not group_id:
+            match, inst = self.build_direct_ipv6_out(datapath, mac, ipv6,
+                                                     vlan_id, tagged, port)
+        else:
+            match, inst = self.build_indirect_ipv6_out(datapath, mac, ipv6,
+                                                       vlan_id, group_id)
+
+        out_flows = [f for f in flows if f['table_id'] == OUT_TABLE]
+        exists, flow = self.check_if_flows_match(out_flows, match, inst)
+
+        if exists != FLOW_NOT_FOUND:
+            flows.remove(flow)
+
+        if exists == FLOW_OLD_DELETE:
+            self.remove_flow(datapath, flow['match'], flow['instructions'],
+                             OUT_TABLE)
+
         return exists, flows
 
 
-    def check_if_flow_and_instructions_match(self, flows, match, instructions):
+    def check_ipv4_flow_exist(self, datapath, mac, ipv4, vlan_id, tagged,
+                                  port, flows, group_id=None):
+        """ Checks if the ipv4 address exists in the flow table """
+        exists = FLOW_NOT_FOUND
+
+        if not group_id:
+            match, inst = self.build_direct_ipv4_out(datapath, mac, ipv4,
+                                                     vlan_id, tagged, port)
+        else:
+            match, inst = self.build_indirect_ipv4_out(datapath, mac, ipv4,
+                                                       vlan_id, group_id)
+
+        out_flows = [f for f in flows if f['table_id'] == OUT_TABLE]
+
+        exists, flow = self.check_if_flows_match(out_flows, match, inst)
+
+        if exists != FLOW_NOT_FOUND:
+            flows.remove(flow)
+        if exists == FLOW_OLD_DELETE:
+            self.remove_flow(datapath, flow['match'], flow['instructions'],
+                             OUT_TABLE)
+
+        return exists, flows
+
+
+    def check_mac_flow_exist(self, datapath, mac, vlan_id, tagged, port,
+                                 flows, group_id=None):
+        """ Checks to see if the mac address exists in the flow table """
+        exists = FLOW_NOT_FOUND
+        in_flows = [f for f in flows if ['table_id'] == IN_TABLE]
+        out_flows = [f for f in flows if f['table_id'] == OUT_TABLE]
+        if not group_id:
+            in_match, in_inst = self.build_direct_mac_flow_in(datapath, mac,
+                                                              vlan_id, tagged,
+                                                              port)
+            exists, flow = self.check_if_flows_match(in_flows, in_match, in_inst)
+            if exists == FLOW_NOT_FOUND:
+                return exists, flows
+
+            flows.remove(flow)
+            out_match, out_inst = self.build_direct_mac_flow_out(datapath, mac,
+                                                        vlan_id, tagged, port)
+            if exists == FLOW_OLD_DELETE:
+                self.remove_flow(datapath, flow['match'], flow['instructions'],
+                                 IN_TABLE)
+                _, out_flow = self.check_if_flows_match(out_flows, out_match,
+                                                        out_inst)
+                flows.remove(out_flow)
+                self.remove_flow(datapath, out_flow['match'],
+                                 out_flow['instructions'], OUT_TABLE)
+                return exists, flows
+
+            if exists == FLOW_TO_UPDATE:
+                self.update_flow(datapath, in_match, in_inst, IN_TABLE)
+                _, out_flow = self.check_if_flows_match(out_flows, out_match,
+                                                        out_inst)
+                flows.remove(out_flow)
+                self.update_flow(datapath, out_match, out_inst, OUT_TABLE)
+                return exists, flows
+
+        else:
+            out_match, out_inst = self.build_indirect_mac_flow_out(datapath, mac,
+                                                            vlan_id, group_id)
+
+        exists, flow = self.check_if_flows_match(out_flows, out_match, out_inst)
+        if exists != FLOW_NOT_FOUND:
+            flows.remove(flow)
+        if exists == FLOW_OLD_DELETE:
+            self.remove_flow(datapath, flow['match'], flow['instructions'],
+                             OUT_TABLE)
+        return exists, flows
+
+
+    def check_if_flows_match(self, flows, match, instructions):
         """ Helper to see if a generated flow matches a pulled one """
         exists = FLOW_NOT_FOUND
         for flow in flows:
             if match in flow['match'] and instructions in flow['instructions']:
                 exists = FLOW_EXISTS
                 return exists, flow
-            if match in flow['match'] or instructions in flow['instructions']:
+            # Only check match, since we can't update the match part
+            if match in flow['match']:
                 exists = FLOW_TO_UPDATE
                 return exists, flow
-        return exists, None
+            if instructions in flow['instructions']:
+                exists = FLOW_OLD_DELETE
+                return exists, flow
+        return exists, {}
+
 
     def associate_dp_id_to_swname(self, switches):
-        """ Sets up dictionary to simplify retreiving a switch name when only 
+        """ Sets up dictionary to simplify retreiving a switch name when only
             having a dpid """
-        
+
         dp_id_to_swname = {}
         for switch in switches:
             dp_id = switches[switch]['dp_id']
@@ -683,6 +937,7 @@ class cerberus(app_manager.RyuApp):
     def format_dpid(self, dp_id):
         """ Formats dp id to int for consistency """
         return int(dp_id)
+
 
     def setup_logger(self, loglevel=logging.INFO,
                      logfile=DEFAULT_LOG_FILE, quiet=False):
@@ -751,6 +1006,7 @@ class cerberus(app_manager.RyuApp):
         path = path[::-1]
         return path
 
+
 class Graph():
     """ Graphs all possible next nodes from a node """
     def __init__(self):
@@ -763,6 +1019,7 @@ class Graph():
         """
         self.edges = defaultdict(list)
         self.weights = {}
+
 
     def add_edge(self, from_node, to_node, weight):
         """ Adds a new edge to existing node """
