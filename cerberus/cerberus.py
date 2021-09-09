@@ -260,13 +260,6 @@ class cerberus(app_manager.RyuApp):
             target_dp_id = details['dp_id']
             if target_dp_id in group_links[dp_name]:
                 sw_link = group_links[dp_name][target_dp_id]
-                # l = [sw, sw_link['main'],
-                #      sw_link['other_sw'], sw_link['other_port']]
-                # new_links = self.remove_old_link_for_ff(l, links)
-
-                # sw_link = self.find_group_rule(new_links, sw, sw_link,
-                #                                other_sw, group_links)
-
                 sw_link = self.find_link_backup_group(dp_name, sw_link,
                                                         links, group_links)
 
@@ -278,23 +271,7 @@ class cerberus(app_manager.RyuApp):
                 if route:
                     sw_link = self.find_indirect_group(self, dp_name, route,
                                 links, group_links, target_dp_id, switches)
-                    # sw_link = group_links[sw][target_dp_id]
-                    # next_hop_id = switches[route[1]]['dp_id']
-                    # out_port = group_links[sw][next_hop_id]['main']
-                    # group_links[sw][target_dp_id] = {
-                    #     "main": out_port,
-                    #     "other_sw": route[1],
-                    #     "other_port": group_links[sw][next_hop_id]['other_port']
-                    # }
-                    # new_links = list(links)
 
-                    # li = [sw, group_links[sw][target_dp_id]['main'],
-                    #       group_links[sw][target_dp_id]['other_sw'],
-                    #       group_links[sw][target_dp_id]['other_port']]
-                    # new_links = self.remove_old_link_for_ff(li, links)
-
-                    # sw_link = self.find_group_rule(new_links, sw, sw_link,
-                    #                                other_sw, group_links)
                     self.add_group(datapath, sw_link, target_dp_id)
 
 
@@ -321,7 +298,6 @@ class cerberus(app_manager.RyuApp):
                     "other_sw": route[1],
                     "other_port": group_links[sw][next_hop_id]['other_port']
                     }
-        # new_links = list(links)
 
         link = self.find_link_backup_group(sw, link, links, group_links)
 
@@ -359,8 +335,6 @@ class cerberus(app_manager.RyuApp):
         ofproto = datapath.ofproto
         ofproto_parser: ofproto_v1_3_parser
         ofproto_parser = datapath.ofproto_parser
-        # msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_DELETE,
-        #                                  int(group_id))
         msg = ofproto_parser.OFPGroupMod(datapath,
                                          command=ofproto.OFPGC_DELETE,
                                          group_id=group_id)
@@ -385,18 +359,6 @@ class cerberus(app_manager.RyuApp):
     def add_direct_mac_flow(self, datapath, host_name, mac, vid, tagged, port,
                             priority=DEFAULT_PRIORITY, cookie=DEFAULT_COOKIE):
         """ Add mac flow for directly connected host """
-        # ofproto_parser = datapath.ofproto_parser
-        # ofproto = datapath.ofproto
-        # actions = []
-        # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
-        #                                 eth_dst=mac)
-        # if not tagged:
-        #     actions.append(ofproto_parser.OFPActionPopVlan())
-        # actions.append(ofproto_parser.OFPActionOutput(port))
-        # instructions = [ofproto_parser.OFPInstructionActions(
-        #                     ofproto.OFPIT_APPLY_ACTIONS,
-        #                     actions)]
-
         match, instructions = self.build_direct_mac_flow_out(datapath, mac, vid,
                                                              tagged, port)
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
@@ -458,17 +420,6 @@ class cerberus(app_manager.RyuApp):
                              port, priority=DEFAULT_PRIORITY,
                              cookie=DEFAULT_COOKIE):
         """ Add ipv4 arp rule for directly connected host """
-        # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
-        #                                 eth_type=ether_types.ETH_TYPE_ARP,
-        #                                 arp_tpa=self.clean_ip_address(ipv4))
-        # if not tagged:
-        #     actions.append(ofproto_parser.OFPActionPopVlan())
-        # actions.append(ofproto_parser.OFPActionSetField(eth_dst=mac))
-        # actions.append(ofproto_parser.OFPActionOutput(port))
-
-        # instructions = [ofproto_parser.OFPInstructionActions(
-        #                     ofproto.OFPIT_APPLY_ACTIONS,
-        #                     actions)]
         match, instructions = self.build_direct_ipv4_out(datapath, mac, ipv4,
                                                          vid, tagged, port)
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
@@ -502,23 +453,6 @@ class cerberus(app_manager.RyuApp):
                              port, priority=DEFAULT_PRIORITY,
                              cookie=DEFAULT_COOKIE):
         """ Add ipv6 arp rule for directly connected host """
-        # ofproto_parser = datapath.ofproto_parser
-        # ofproto = datapath.ofproto
-        # actions = []
-        # # "icmpv6_type": 135, "ip_proto": 58, "eth_type": 34525
-        # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
-        #                             icmpv6_type=135, ip_proto=58,
-        #                             eth_type=34525,
-        #                             ipv6_nd_target=self.clean_ip_address(ipv6))
-        # if not tagged:
-        #     actions.append(ofproto_parser.OFPActionPopVlan())
-        # actions.append(ofproto_parser.OFPActionSetField(eth_dst=mac))
-        # actions.append(ofproto_parser.OFPActionOutput(port))
-
-        # instructions = [ofproto_parser.OFPInstructionActions(
-        #                     ofproto.OFPIT_APPLY_ACTIONS,
-        #                     actions)]
-
         match, instructions = self.build_direct_ipv6_out(datapath, mac, ipv6,
                                                          vid, tagged, port)
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
@@ -534,7 +468,6 @@ class cerberus(app_manager.RyuApp):
         ofproto_parser = datapath.ofproto_parser
         match = None
         actions = []
-        # "icmpv6_type": 135, "ip_proto": 58, "eth_type": 34525
         match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
                                     icmpv6_type=135, ip_proto=58,
                                     eth_type=34525,
@@ -555,12 +488,6 @@ class cerberus(app_manager.RyuApp):
         """ Add mac rule for indirectly connected hosts """
         match, instructions = self.build_indirect_mac_flow_out(datapath, mac,
                                                           vid, group_id)
-        # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
-        #                                 eth_dst=mac)
-
-        # instructions = [ofproto_parser.OFPInstructionActions(
-        #                     ofproto.OFPIT_APPLY_ACTIONS,
-        #                     [ofproto_parser.OFPActionGroup(group_id)])]
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
 
 
@@ -588,18 +515,6 @@ class cerberus(app_manager.RyuApp):
                                group_id, priority=DEFAULT_PRIORITY,
                                cookie=DEFAULT_COOKIE):
         """ Add ipv4 rule for inderectly connected hosts """
-        # ofproto_parser = datapath.ofproto_parser
-        # ofproto = datapath.ofproto
-
-        # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
-        #                                 eth_type=ether_types.ETH_TYPE_ARP,
-        #                                 arp_tpa=self.clean_ip_address(ipv4))
-
-        # instructions = [ofproto_parser.OFPInstructionActions(
-        #                     ofproto.OFPIT_APPLY_ACTIONS,
-        #                     [ofproto_parser.OFPActionSetField(eth_dst=mac),
-        #                      ofproto_parser.OFPActionGroup(group_id)])]
-
         match, instructions = self.build_indirect_ipv4_out(datapath, mac, ipv4,
                                                            vid, group_id)
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
@@ -629,19 +544,6 @@ class cerberus(app_manager.RyuApp):
                                group_id, priority=DEFAULT_PRIORITY,
                                cookie=DEFAULT_COOKIE):
         """ Add ipv6 rule for inderectly connected hosts """
-        # ofproto_parser = datapath.ofproto_parser
-        # ofproto = datapath.ofproto
-
-        # match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
-        #                                 icmpv6_type=135, ip_proto=58,
-        #                                 eth_type=34525,
-        #                                 ipv6_nd_target=self.clean_ip_address(ipv6))
-
-        # instructions = [ofproto_parser.OFPInstructionActions(
-        #                     ofproto.OFPIT_APPLY_ACTIONS,
-        #                     [ofproto_parser.OFPActionSetField(eth_dst=mac),
-        #                      ofproto_parser.OFPActionGroup(group_id)])]
-
         match, instructions = self.build_indirect_ipv6_out(datapath, mac, ipv6,
                                                            vid, group_id)
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
@@ -679,21 +581,6 @@ class cerberus(app_manager.RyuApp):
         match = None
         actions = []
         if mac:
-            # if tagged:
-            #     match = ofproto_parser.OFPMatch(in_port=port,
-            #                 vlan_vid=(ofproto.OFPVID_PRESENT | vlan),
-            #                 eth_src=mac)
-            # else:
-            #     match = ofproto_parser.OFPMatch(in_port=port, eth_src=mac)
-            #     tag_vlan_actions = [
-            #         ofproto_parser.OFPActionPushVlan(),
-            #         ofproto_parser.OFPActionSetField(
-            #             vlan_vid=(ofproto.OFPVID_PRESENT | vlan))]
-
-            #     instructions = ofproto_parser.OFPInstructionActions(
-            #                         ofproto.OFPIT_APPLY_ACTIONS,
-            #                         tag_vlan_actions)
-            #     actions.append(instructions)
             match, actions = self.build_direct_mac_flow_in(datapath, mac, vlan,
                                                            tagged, port)
         else:
@@ -770,7 +657,6 @@ class cerberus(app_manager.RyuApp):
             backup = [v['main'] for k,v in group_links[sw].items() if route[1] == v['other_sw']]
             sw_link['backup'] = str(backup[0])
 
-        # self.add_group(datapath, sw_link, group_id)
         return sw_link
 
 
@@ -857,16 +743,6 @@ class cerberus(app_manager.RyuApp):
                 buckets = self.build_group_buckets(datapath, link)
                 groups = self.assess_groups(datapath, groups, group_id,
                                             buckets, link)
-                # if self.buckets_groups_match(groups, group_id, buckets):
-                #     # Remove group if it's been found
-                #     groups = [g for g in groups if g['group_id'] != group_id]
-                #     continue
-                # if self.group_id_exists(groups, group_id):
-                #     # Remove group if it's been found
-                #     groups = [g for g in groups if g['group_id'] != group_id]
-                #     self.update_group(datapath, buckets, group_id)
-                #     continue
-                # self.add_group(datapath, link, group_id)
         else:
             for other_sw, details in switches.items():
                 if dp_name == other_sw:
@@ -895,12 +771,6 @@ class cerberus(app_manager.RyuApp):
             for group in groups:
                 self.remove_group(datapath, group['group_id'])
         return
-        # for group_id, link in switches[dp_name].items():
-        #     if 'backup' in link:
-        #         buckets = self.build_group_buckets(datapath, link)
-        #         groups = self.assess_groups(datapath, groups, group_id,
-        #                                     buckets, link)
-        #     pass
 
 
     def assess_groups(self, datapath, groups, group_id, buckets, link):
