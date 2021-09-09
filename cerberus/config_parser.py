@@ -243,7 +243,7 @@ class Parser():
             group_links = self.set_group_link(group_links, link[0], link[1], 
                                               link[2], s2_id, link[3])
             group_links = self.set_group_link(group_links, link[2], link[3],
-                                              link[0], s1_id, link[3])
+                                              link[0], s1_id, link[1])
 
         return group_links
 

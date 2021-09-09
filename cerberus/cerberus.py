@@ -87,6 +87,7 @@ class cerberus(app_manager.RyuApp):
             if self.datapath_to_be_configured(dp_id):
                 self.logger.info(f"Datapath: {dp_id} to be configured")
                 self.send_flow_stats_request(ev.dp)
+                self.send_group_desc_stats_request(ev.dp)
 
     def sw_already_configured(self, datapath: controller.Datapath, flows: list):
         """ Helper to pull switch state and see if it has already been configured """
@@ -104,8 +105,20 @@ class cerberus(app_manager.RyuApp):
                                                         port, flows, group_id)
 
 
+    def send_group_desc_stats_request(self, datapath: controller.Datapath):
+        """ Sends request to datapath for its group stats """
+        ofp_parser: ofproto_v1_3_parser
+        ofp_parser = datapath.ofproto_parser
+        ofp: ofproto_v1_3
+        ofp = datapath.ofproto
 
-    def send_flow_stats_request(self, datapath):
+        req = ofp_parser.OFPGroupDescStatsRequest(datapath, 0)
+
+        datapath.send_msg(req)
+
+
+    def send_flow_stats_request(self, datapath: controller.Datapath):
+        """ Sends request to the datapath for its group stats """
         ofp_parser: ofproto_v1_3_parser
         ofp_parser = datapath.ofproto_parser
         req = ofp_parser.OFPFlowStatsRequest(datapath)
@@ -113,6 +126,7 @@ class cerberus(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER) #type: ignore
     def flow_stats_reply_handler(self, ev):
+        """ Processes the flow stats from the datapath """
         flows = []
         dp: controller.Datapath
         dp = ev.msg.datapath
@@ -134,7 +148,7 @@ class cerberus(app_manager.RyuApp):
             flow = {"table_id": stat.table_id, "match": stat.match,
                     "instructions": stat.instructions, "cookie": stat.cookie}
             flows.append(flow)
-        self.logger.info(f"Datapath: {dp_id}\t FlowStats: {flows}")
+        self.logger.debug(f"Datapath: {dp_id}\t FlowStats: {flows}")
         if len([f for f in flows if f['cookie'] == self.cookie]) < 1:
             self.logger.info(f"Datapath {dp_id} will be configured")
             self.clear_flows(dp)
@@ -142,10 +156,29 @@ class cerberus(app_manager.RyuApp):
         else:
             self.sw_already_configured(dp, flows)
 
+    @set_ev_cls(ofp_event.EventOFPGroupDescStatsReply, MAIN_DISPATCHER) #type: ignore
+    def group_desc_stat_reply_handler(self, ev):
+        """ Processes the group stats """
+        groups = []
+        dp: controller.Datapath
+        dp = ev.msg.datapath
+        dp_id = dp.id
+        stat: ofproto_v1_3_parser.OFPGroupDescStats
+        for stat in ev.msg.body:
+            groups.append({"group_id": stat.group_id, "buckets": stat.buckets})
+        self.logger.info(f"Datapath: {dp_id} Groups: {groups}")
+
+        if len(groups) < 1:
+            self.setup_groups(dp)
+        else:
+            self.compare_and_update_groups(dp, groups)
+
 
     def full_sw_setup(self, datapath):
         """ Sets up the switch for the first time """
         dp_id = datapath.id
+        # Assume that a switch with no flows have no groups
+        # Groups needed for making group rules
         self.setup_groups(datapath)
         self.setup_sw_hosts(datapath)
         self.logger.info(f"Datapath: {dp_id} configured")
@@ -181,7 +214,6 @@ class cerberus(app_manager.RyuApp):
     def setup_flows_for_direct_connect(self, datapath, port, host_name, mac,
                                        vlan_id, tagged, ipv4, ipv6):
         """ Sets up the flows for hosts directly connected to the switch """
-        # dp_id = datapath.id
         self.add_direct_mac_flow(datapath, host_name, mac, vlan_id,
                                  tagged, port)
         self.add_direct_ipv4_flow(datapath, host_name, mac, ipv4, vlan_id,
@@ -217,7 +249,7 @@ class cerberus(app_manager.RyuApp):
         for sw in group_links:
             self.setup_core_in_table(datapath, sw)
             if sw in isolated_switches:
-                for other_sw in [s for s in group_links if s == sw]:
+                for other_sw in [s for s in group_links if s != sw]:
                     group_id = int(switches[other_sw]['dp_id'])
                     link = self.config['group_links'][sw]
                     self.add_group(datapath, link, int(group_id))
@@ -228,33 +260,73 @@ class cerberus(app_manager.RyuApp):
                 target_dp_id = details['dp_id']
                 if target_dp_id in group_links[sw]:
                     sw_link = group_links[sw][target_dp_id]
-                    l = [sw, sw_link['main'],
-                            sw_link['other_sw'], sw_link['other_port']]
-                    new_links = self.remove_old_link_for_ff(l, links)
+                    # l = [sw, sw_link['main'],
+                    #      sw_link['other_sw'], sw_link['other_port']]
+                    # new_links = self.remove_old_link_for_ff(l, links)
 
-                    self.find_group_rule(datapath, new_links, sw, sw_link,
-                                            other_sw, group_links, target_dp_id)
+                    # sw_link = self.find_group_rule(new_links, sw, sw_link,
+                    #                                other_sw, group_links)
+
+                    sw_link = self.find_link_backup_group(sw, sw_link,
+                                                          links, group_links)
+
+                    self.add_group(datapath, sw_link, target_dp_id)
+
                 else:
                     route = self.find_route(links, sw, other_sw)
 
                     if route:
-                        sw_link = group_links[sw][target_dp_id]
-                        next_hop_id = switches[route[1]]['dp_id']
-                        out_port = group_links[sw][next_hop_id]['main']
-                        group_links[sw][target_dp_id] = {
-                            "main": out_port,
-                            "other_sw": route[1],
-                            "other_port": group_links[sw][next_hop_id]['other_port']
-                        }
-                        new_links = list(links)
+                        sw_link = self.find_indirect_group(self, sw, route,
+                                    links, group_links, target_dp_id, switches)
+                        # sw_link = group_links[sw][target_dp_id]
+                        # next_hop_id = switches[route[1]]['dp_id']
+                        # out_port = group_links[sw][next_hop_id]['main']
+                        # group_links[sw][target_dp_id] = {
+                        #     "main": out_port,
+                        #     "other_sw": route[1],
+                        #     "other_port": group_links[sw][next_hop_id]['other_port']
+                        # }
+                        # new_links = list(links)
 
-                        li = [sw, group_links[sw][target_dp_id]['main'],
-                              group_links[sw][target_dp_id]['other_sw'],
-                              group_links[sw][target_dp_id]['other_port']]
-                        new_links = self.remove_old_link_for_ff(li, links)
+                        # li = [sw, group_links[sw][target_dp_id]['main'],
+                        #       group_links[sw][target_dp_id]['other_sw'],
+                        #       group_links[sw][target_dp_id]['other_port']]
+                        # new_links = self.remove_old_link_for_ff(li, links)
 
-                        self.find_group_rule(datapath, new_links, sw, sw_link,
-                                             other_sw, group_links, target_dp_id)
+                        # sw_link = self.find_group_rule(new_links, sw, sw_link,
+                        #                                other_sw, group_links)
+
+                        self.add_group(datapath, sw_link, target_dp_id)
+
+
+    def find_link_backup_group(self, sw, link, links, group_links):
+        """ Help to fill out group details for switches directly connected """
+        other_sw = link['other_sw']
+        l = [sw, link['main'], other_sw, link['other_port']]
+        new_links = list(links)
+        new_links = self.remove_old_link_for_ff(l, new_links)
+
+        link = self.find_group_rule(new_links, sw, link, other_sw, group_links)
+
+        return link
+
+
+    def find_indirect_group(self, datapath, sw, route, links, group_links,
+                             group_id, switches):
+        """ Help to fill out group details for switches indirectly connected """
+        link = group_links[sw][group_id]
+        next_hop_id = switches[route[1]]['dp_id']
+        out_port = group_links[sw][next_hop_id]['main']
+        group_links[sw][group_id] = {
+                    "main": out_port,
+                    "other_sw": route[1],
+                    "other_port": group_links[sw][next_hop_id]['other_port']
+                    }
+        # new_links = list(links)
+
+        link = self.find_link_backup_group(sw, link, links, group_links)
+
+        return link
 
 
     def add_group(self, datapath: controller.Datapath, link, group_id):
@@ -267,6 +339,32 @@ class cerberus(app_manager.RyuApp):
         msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_ADD,
                                          ofproto.OFPGT_FF, int(group_id),
                                          buckets)
+        datapath.send_msg(msg)
+
+
+    def update_group(self, datapath: controller.Datapath, buckets, group_id):
+        """ Helper to update an existing group on the datapath """
+        ofproto: ofproto_v1_3
+        ofproto = datapath.ofproto
+        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser = datapath.ofproto_parser
+        msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_MODIFY,
+                                         ofproto.OFPGT_FF, int(group_id),
+                                         buckets)
+        datapath.send_msg(msg)
+
+
+    def remove_group(self, datapath, group_id):
+        """ Helper to remove an existing group from the datapath """
+        ofproto: ofproto_v1_3
+        ofproto = datapath.ofproto
+        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser = datapath.ofproto_parser
+        # msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_DELETE,
+        #                                  int(group_id))
+        msg = ofproto_parser.OFPGroupMod(datapath,
+                                         command=ofproto.OFPGC_DELETE,
+                                         group_id=group_id)
         datapath.send_msg(msg)
 
 
@@ -654,27 +752,27 @@ class cerberus(app_manager.RyuApp):
         new_links = list(links)
         if link_to_remove in new_links:
             new_links.remove(link_to_remove)
-            return new_links
-        li = [link_to_remove[2], link_to_remove[3],
-              link_to_remove[0], link_to_remove[1]]
-        try:
-            new_links.remove(li)
-        except:
-            self.logger.error("Error trying to remove link from the core.")
-            self.logger.error(f"Link to remove: {str(link_to_remove)}")
-            self.logger.error(f"Link Array: {str(links)}")
+        else:
+            li = [link_to_remove[2], link_to_remove[3],
+                link_to_remove[0], link_to_remove[1]]
+            try:
+                new_links.remove(li)
+            except:
+                self.logger.error("Error trying to remove link from the core.")
+                self.logger.error(f"Link to remove: {str(link_to_remove)}")
+                self.logger.error(f"Link Array: {str(links)}")
         return new_links
 
 
-    def find_group_rule(self, datapath, links, sw, sw_link, target_sw,
-                        group_links, group_id):
+    def find_group_rule(self, links, sw, sw_link, target_sw, group_links):
         """ Find the path between 2 switches and create links for them """
         route = self.find_route(links, sw, target_sw)
         if route:
             backup = [v['main'] for k,v in group_links[sw].items() if route[1] == v['other_sw']]
             sw_link['backup'] = str(backup[0])
 
-        self.add_group(datapath, sw_link, group_id)
+        # self.add_group(datapath, sw_link, group_id)
+        return sw_link
 
 
     def find_route(self, links, source_sw, target_sw):
@@ -743,6 +841,100 @@ class cerberus(app_manager.RyuApp):
             sys.exit()
 
         return data
+
+
+    def compare_and_update_groups(self, datapath: controller.Datapath, groups):
+        """ Compares pulled rules with generated rules to see if they need to
+            be added,updated or removed """
+        group_links = self.config['group_links']
+        dp_name = self.config['dp_id_to_sw_name'][datapath.id]
+        switches = self.config['switches']
+        links = self.config['links']
+        isolated_switches = Parser(self.logname).find_isolated_switches(group_links)
+
+        if dp_name in isolated_switches:
+            for group_id in isolated_switches[dp_name]:
+                link = isolated_switches[dp_name][group_id]
+                buckets = self.build_group_buckets(datapath, link)
+                groups = self.assess_groups(datapath, groups, group_id,
+                                            buckets, link)
+                # if self.buckets_groups_match(groups, group_id, buckets):
+                #     # Remove group if it's been found
+                #     groups = [g for g in groups if g['group_id'] != group_id]
+                #     continue
+                # if self.group_id_exists(groups, group_id):
+                #     # Remove group if it's been found
+                #     groups = [g for g in groups if g['group_id'] != group_id]
+                #     self.update_group(datapath, buckets, group_id)
+                #     continue
+                # self.add_group(datapath, link, group_id)
+        else:
+            for other_sw, details in switches.items():
+                if dp_name == other_sw:
+                    continue
+                target_dp_id = details['dp_id']
+                if target_dp_id in group_links[dp_name]:
+                    link = group_links[dp_name][target_dp_id]
+                    if 'backup' not in link:
+                        link = self.find_link_backup_group(dp_name, link,
+                                                        links, group_links)
+                    buckets = self.build_group_buckets(datapath, link)
+                    groups = self.assess_groups(datapath, groups, target_dp_id,
+                                                buckets, link)
+                else:
+                    route = self.find_route(links, dp_name, other_sw)
+
+                    if route:
+                        sw_link = self.find_indirect_group(datapath, dp_name,
+                                                    route, links, group_links,
+                                                    target_dp_id, switches)
+                        buckets = self.build_group_buckets(datapath, sw_link)
+                        groups = self.assess_groups(datapath, groups, target_dp_id,
+                                                buckets, sw_link)
+
+        if len(groups) > 1:
+            for group in groups:
+                self.remove_group(datapath, group['group_id'])
+        return
+        # for group_id, link in switches[dp_name].items():
+        #     if 'backup' in link:
+        #         buckets = self.build_group_buckets(datapath, link)
+        #         groups = self.assess_groups(datapath, groups, group_id,
+        #                                     buckets, link)
+        #     pass
+
+
+    def assess_groups(self, datapath, groups, group_id, buckets, link):
+        """ Assess whether a group and bucket combination exists """
+        if self.buckets_groups_match(groups, group_id, buckets):
+            # Remove group if it's been found
+            groups = [g for g in groups if g['group_id'] != group_id]
+            return groups
+        if self.group_id_exists(groups, group_id):
+            # Remove group if it's been found
+            groups = [g for g in groups if g['group_id'] != group_id]
+            self.update_group(datapath, buckets, group_id)
+            return groups
+        self.add_group(datapath, link, group_id)
+        return groups
+
+
+    def group_id_exists(self, groups, group_id):
+        """ Checks to see if the group_id is present on the switch """
+        for group in groups:
+            if group_id == group['group_id']:
+                return True
+        return False
+
+
+    def buckets_groups_match(self, groups, group_id, buckets):
+        """ Checks to ensure that the group on the switch matches the
+            expected group """
+
+        for group in groups:
+            if group_id == group['group_id'] and buckets == group['buckets']:
+                return True
+        return False
 
 
     def check_if_host_in_flows(self, datapath: controller.Datapath, host, port,
