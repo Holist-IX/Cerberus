@@ -245,58 +245,57 @@ class cerberus(app_manager.RyuApp):
         group_links = self.config['group_links']
         switches = self.config['switches']
         links = self.config['links']
+        dp_name = self.config['dp_id_to_sw_name'][datapath.id]
 
-        for sw in group_links:
-            self.setup_core_in_table(datapath, sw)
-            if sw in isolated_switches:
-                for other_sw in [s for s in group_links if s != sw]:
-                    group_id = int(switches[other_sw]['dp_id'])
-                    link = self.config['group_links'][sw]
-                    self.add_group(datapath, link, int(group_id))
+        self.setup_core_in_table(datapath, dp_name)
+        if dp_name in isolated_switches:
+            for other_sw in [s for s in group_links if s != dp_name]:
+                group_id = int(switches[other_sw]['dp_id'])
+                link = self.config['group_links'][dp_name]
+                self.add_group(datapath, link, int(group_id))
+            return
+        for other_sw, details in switches.items():
+            if other_sw == dp_name:
                 continue
-            for other_sw, details in switches.items():
-                if other_sw == sw:
-                    continue
-                target_dp_id = details['dp_id']
-                if target_dp_id in group_links[sw]:
-                    sw_link = group_links[sw][target_dp_id]
-                    # l = [sw, sw_link['main'],
-                    #      sw_link['other_sw'], sw_link['other_port']]
-                    # new_links = self.remove_old_link_for_ff(l, links)
+            target_dp_id = details['dp_id']
+            if target_dp_id in group_links[dp_name]:
+                sw_link = group_links[dp_name][target_dp_id]
+                # l = [sw, sw_link['main'],
+                #      sw_link['other_sw'], sw_link['other_port']]
+                # new_links = self.remove_old_link_for_ff(l, links)
+
+                # sw_link = self.find_group_rule(new_links, sw, sw_link,
+                #                                other_sw, group_links)
+
+                sw_link = self.find_link_backup_group(dp_name, sw_link,
+                                                        links, group_links)
+
+                self.add_group(datapath, sw_link, target_dp_id)
+
+            else:
+                route = self.find_route(links, dp_name, other_sw)
+
+                if route:
+                    sw_link = self.find_indirect_group(self, dp_name, route,
+                                links, group_links, target_dp_id, switches)
+                    # sw_link = group_links[sw][target_dp_id]
+                    # next_hop_id = switches[route[1]]['dp_id']
+                    # out_port = group_links[sw][next_hop_id]['main']
+                    # group_links[sw][target_dp_id] = {
+                    #     "main": out_port,
+                    #     "other_sw": route[1],
+                    #     "other_port": group_links[sw][next_hop_id]['other_port']
+                    # }
+                    # new_links = list(links)
+
+                    # li = [sw, group_links[sw][target_dp_id]['main'],
+                    #       group_links[sw][target_dp_id]['other_sw'],
+                    #       group_links[sw][target_dp_id]['other_port']]
+                    # new_links = self.remove_old_link_for_ff(li, links)
 
                     # sw_link = self.find_group_rule(new_links, sw, sw_link,
                     #                                other_sw, group_links)
-
-                    sw_link = self.find_link_backup_group(sw, sw_link,
-                                                          links, group_links)
-
                     self.add_group(datapath, sw_link, target_dp_id)
-
-                else:
-                    route = self.find_route(links, sw, other_sw)
-
-                    if route:
-                        sw_link = self.find_indirect_group(self, sw, route,
-                                    links, group_links, target_dp_id, switches)
-                        # sw_link = group_links[sw][target_dp_id]
-                        # next_hop_id = switches[route[1]]['dp_id']
-                        # out_port = group_links[sw][next_hop_id]['main']
-                        # group_links[sw][target_dp_id] = {
-                        #     "main": out_port,
-                        #     "other_sw": route[1],
-                        #     "other_port": group_links[sw][next_hop_id]['other_port']
-                        # }
-                        # new_links = list(links)
-
-                        # li = [sw, group_links[sw][target_dp_id]['main'],
-                        #       group_links[sw][target_dp_id]['other_sw'],
-                        #       group_links[sw][target_dp_id]['other_port']]
-                        # new_links = self.remove_old_link_for_ff(li, links)
-
-                        # sw_link = self.find_group_rule(new_links, sw, sw_link,
-                        #                                other_sw, group_links)
-
-                        self.add_group(datapath, sw_link, target_dp_id)
 
 
     def find_link_backup_group(self, sw, link, links, group_links):
