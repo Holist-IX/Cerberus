@@ -9,13 +9,15 @@ import sys
 
 from cerberus.config_parser import Validator, Parser
 from cerberus.exceptions import *
+from cerberus.api import api
 from datetime import datetime
 from pbr.version import VersionInfo
+from ryu.app.wsgi import WSGIApplication
 from ryu.base import app_manager
 from ryu.controller import ofp_event, dpset, controller
 from ryu.controller.handler import MAIN_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3, ofproto_v1_3_parser
-from ryu.lib.packet import packet, ethernet, ether_types, vlan
+from ryu.lib.packet import ether_types
 
 # Flow Tables
 IN_TABLE = 0
@@ -42,11 +44,12 @@ class cerberus(app_manager.RyuApp):
     the topologies are known in advanced
     """
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
-    _CONTEXTS = {'dpset': dpset.DPSet}
+    _CONTEXTS = {'dpset': dpset.DPSet, 'wsgi': WSGIApplication}
 
     def __init__(self, cookie=DEFAULT_COOKIE, *_args, **_kwargs):
         super(cerberus, self).__init__(*_args, **_kwargs)
-
+        self.wsgi = _kwargs['wsgi']
+        self.wsgi.register(api, {'cerberus_main': self})
         self.dpset = _kwargs['dpset']
         self.logname = 'cerberus'
         self.logger = self.setup_logger()
@@ -1153,6 +1156,15 @@ class cerberus(app_manager.RyuApp):
         """ Formats dp id to int for consistency """
         return int(dp_id)
 
+
+    def hello_world(self):
+        """ Hello World tester to test the API """
+        json_string = {"resp": "Sup"}
+        return json_string
+
+    def get_switches(self):
+        json_string = self.config['switches']
+        return json_string
 
     def setup_logger(self, loglevel=logging.INFO,
                      logfile=DEFAULT_LOG_FILE, quiet=False):
