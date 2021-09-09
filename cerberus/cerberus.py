@@ -4,10 +4,12 @@ from collections import defaultdict
 import logging
 import json
 import os
+import shutil
 import sys
 
 from cerberus.config_parser import Validator, Parser
 from cerberus.exceptions import *
+from datetime import datetime
 from pbr.version import VersionInfo
 from ryu.base import app_manager
 from ryu.controller import ofp_event, dpset, controller
@@ -24,6 +26,8 @@ DEFAULT_PRIORITY = 1500
 DEFAULT_CONFIG = "/etc/cerberus/topology.json"
 DEFAULT_LOG_PATH = "/var/log/cerberus"
 DEFAULT_LOG_FILE = "/var/log/cerberus/cerberus.log"
+DEFAULT_ROLLBACK_DIR = "/etc/cerberus/rollback"
+DEFAULT_FAILED_CONF_DIR = "/etc/cerberus/failed"
 DEFAULT_COOKIE = 525033
 
 FLOW_NOT_FOUND = 0
@@ -51,19 +55,31 @@ class cerberus(app_manager.RyuApp):
         self.config = self.get_config_file()
         self.cookie = cookie
 
-    def get_config_file(self, config_file=DEFAULT_CONFIG):
+    def get_config_file(self, config_file: str = DEFAULT_CONFIG, 
+                        rollback_directory: str = DEFAULT_ROLLBACK_DIR,
+                        failed_directory: str = DEFAULT_FAILED_CONF_DIR):
         """ Reads config file from file and checks it's validity """
         # TODO: Get config file from env if set
         conf_parser = Parser(self.logname)
         config = self.open_config_file(config_file)
         self.logger.info("Checking config file")
         if not Validator().check_config(config, self.logname):
+            self.copy_failed_config_to_failed_dir(config_file, failed_directory)
+            self.logger.error(f"Restart cerberus with a valid config. A copy " +
+                              f"of the failed config has been stored in " + 
+                              f"{failed_directory}")
+            if self.rollback_files_exist(rollback_directory):
+                self.logger.error(f"Potential rollback files have been found " +
+                                  f"in {rollback_directory}")
             sys.exit()
         new_hashed_config = conf_parser.get_hash(config)
-        if self.hashed_config:
-            if new_hashed_config == self.hashed_config and self.config:
-                return self.config
-            # TODO pull rules and compare the differences
+        prev_config = self.get_rollback_running_config(rollback_directory)
+        if prev_config:
+            old_conf_hash = conf_parser.get_hash(prev_config)
+            if old_conf_hash != new_hashed_config:
+                self.store_rollbacks(config_file, rollback_directory)
+        else:
+            self.store_rollbacks(config_file, rollback_directory)
         self.hashed_config = conf_parser.get_hash(config)
         links, p4_switches, switches, group_links = conf_parser.parse_config(config)
         print(switches)
@@ -654,7 +670,8 @@ class cerberus(app_manager.RyuApp):
         """ Find the path between 2 switches and create links for them """
         route = self.find_route(links, sw, target_sw)
         if route:
-            backup = [v['main'] for k,v in group_links[sw].items() if route[1] == v['other_sw']]
+            backup = [v['main'] for k,v in group_links[sw].items() 
+                      if route[1] == v['other_sw']]
             sw_link['backup'] = str(backup[0])
 
         return sw_link
@@ -727,6 +744,143 @@ class cerberus(app_manager.RyuApp):
 
         return data
 
+
+    def store_rollbacks(self, config_file: str, rollback_directory: str):
+        """ Stores the running config file in the rollback area, and move the 
+            previous running config to rollback """
+        try:
+            file_list = os.listdir(rollback_directory)
+            if len(file_list) > 1:
+                rollback_files = [f for f in file_list if f.endswith('.rollback')]
+                running_files = [f for f in file_list if f.endswith('.running')]
+
+                if len(rollback_files) > 0:
+                    rollback_file = rollback_files[0]
+                    self.move_rollback_conf_to_backups(
+                        f"{rollback_directory}/{rollback_file}")
+                if len(running_files) > 0:
+                    running_file = running_files[0]
+                    self.move_running_conf_to_rollback(
+                        f"{rollback_directory}/{running_file}")
+            now = datetime.now()
+            datefmt = "%Y-%m-%d-%H:%M:%S"
+            running_conf_fname = f"{now.strftime(datefmt)}.running"
+            shutil.copy(config_file, 
+                        f"{rollback_directory}/{running_conf_fname}")
+        except Exception as err:
+            self.logger.error("Error storing rollback")
+            self.logger.error(err)
+
+    def move_rollback_conf_to_backups(self, rollback_file):
+        """ Stores the last rollback config to the list of backup files """
+        try:
+            cleaned_roll_back_name = f"{rollback_file.split('.')[0]}.json"
+            shutil.move(rollback_file, cleaned_roll_back_name)
+        except Exception as err:
+            self.logger.error("Error in storing the backups")
+            self.logger.error(f"Rollback filename:{rollback_file}")
+            self.logger.error(err)
+
+    def move_running_conf_to_rollback(self, running_file):
+        """ Sores the last running config to be the rollback config """
+        try:
+            new_rollback_name = f"{running_file.split('.')[0]}.rollback"
+            shutil.move(running_file, new_rollback_name)
+        except Exception as err:
+            self.logger.error("Error in moving the running file to be rollback")
+            self.logger.error(f"Running conf name:{running_file}")
+            self.logger.error(err)
+
+
+    def copy_failed_config_to_failed_dir(self, config_file: str, 
+                                         failed_conf_directory: str):
+        """ Copy a failed config to the failed config directory for analysis 
+            later. This is primarily to help with scripting issues
+
+        Args:
+            config_file (str): Path of failed config file to store in the failed
+                               directory
+            failed_conf_directory (str): Directory where failed configs are 
+                                         to be stored
+        """
+        try:
+            shutil.copy(config_file, f"{failed_conf_directory}/{config_file}")
+        except Exception as err:
+            self.logger.error("Error storing the failed config in the failed" +
+                              f"config directory! (Ironic isn't it?)")
+            self.logger.error(f"Failed to copy: {config_file} " + 
+                              f"into: {failed_conf_directory}")
+
+
+
+
+    def rollback_files_exist(self, rollback_directory: str) -> bool:
+        """ Goes through the rollback directory and see if there are any 
+            potential candidates to rollback to
+
+        Args:
+            rollback_directory (str): Directory to search rollback files in
+
+        Returns:
+            bool: rollback Candidate exists
+        """
+        if len(os.listdir(rollback_directory)) < 1:
+            return False
+        file_list = [f for f in os.listdir(rollback_directory) 
+                     if f.endswith(".running")
+                     or f.endswith(".rollback")
+                     or f.endswith(".json")]
+        if len(file_list) > 0:
+            return True
+        return False
+
+
+    def get_rollback_running_config(self, rollback_directory: str):
+        """Finds the previous running config to use for roll back
+
+        Args:
+            rollback_directory (str): Directory to look in for rollback config 
+            files
+
+        Returns:
+            dict: Config file or None if no file is found
+        """
+        try:
+            # if len(os.listdir(rollback_directory)) < 1:
+            #     return None
+            if not self.rollback_files_exist(rollback_directory):
+                return None
+            file_list = [f for f in os.listdir(rollback_directory) 
+                         if f.endswith(".running")]
+            # Look to see if there was a previous working running config
+            if len(file_list) > 0:
+                last_running_conf = file_list[0]
+                return self.open_config_file(
+                    f"{rollback_directory}/{last_running_conf}")
+            # If not see if there is a previous rollback file
+            if len([f for f in os.listdir(rollback_directory) 
+                    if f.endswith(".rollback")]) > 0:
+                rollback_file = [f for f in os.listdir(rollback_directory) 
+                                 if f.endswith(".rollback")][0]
+                return self.open_config_file(
+                                    f"{rollback_directory}/{rollback_file}")
+            # Looks even further back to see if there are any previous files at all
+            # Here be dragons
+            if len([f for f in os.listdir(rollback_directory) 
+                    if f.endswith(".json")]) > 0:
+                files = [f for f in os.listdir(rollback_directory) 
+                         if f.endswith(".json")]
+                sorted_files = sorted(files, reverse=True)
+                conf_to_load = sorted_files[0]
+                return self.open_config_file(
+                            f"{rollback_directory}/{conf_to_load}")
+            # Files found but does not meet any criteria for rollback
+            return None
+        except Exception as err:
+            self.logger.error("Error in retrieving the last known " + 
+                              "running config")
+            self.logger.error(err)
+ 
 
     def compare_and_update_groups(self, datapath: controller.Datapath, groups):
         """ Compares pulled rules with generated rules to see if they need to

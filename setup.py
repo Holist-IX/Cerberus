@@ -16,6 +16,8 @@ def setup_configs():
     athos_log = os.path.join(log_dir, 'cerberus.log')
     conf_dir = '/etc/cerberus/'
     conf_file = os.path.join(conf_dir, 'topology.json')
+    rollback_dir = '/etc/cerberus/rollback/'
+    failed_dir = '/etc/cerberus/failed/'
     umbrella_json = os.path.join(conf_dir, 'umbrella.json')
     defualt_umbrella = resource_filename(__name__, 'etc/cerberus/umbrella.json')
     default_conf = resource_filename(__name__, 'etc/cerberus/topology.json')
@@ -29,8 +31,14 @@ def setup_configs():
         if not os.path.exists(conf_dir):
             print(f"Creating config dir: {conf_dir}")
             os.makedirs(conf_dir)
-            os.makedirs(f"{conf_dir}rollback/")
-            os.makedirs(f"{conf_dir}failed/")
+            os.makedirs(rollback_dir)
+            os.makedirs(failed_dir)
+        if not os.path.exists(rollback_dir):
+            print(f"Creating rollback dir: {rollback_dir}")
+            os.makedirs(rollback_dir)
+        if not os.path.exists(failed_dir):
+            print(f"Creating failed config dir: {failed_dir}")
+            os.makedirs(failed_dir)
         if not os.path.isfile(conf_file):
             print("Setting up default config for topology")
             print(f"Copying: {default_conf} to {conf_file} ")
