@@ -6,6 +6,8 @@ import json
 import os
 import shutil
 import sys
+import hashlib
+from typing import OrderedDict
 
 from cerberus.config_parser import Validator, Parser
 from cerberus.exceptions import *
@@ -52,9 +54,11 @@ class cerberus(app_manager.RyuApp):
         self.wsgi.register(api, {'cerberus_main': self})
         self.dpset = _kwargs['dpset']
         self.logname = 'cerberus'
+        self.rollback_dir = DEFAULT_ROLLBACK_DIR
         self.logger = self.setup_logger()
         self.logger.info(f"Starting Cerberus {VersionInfo('cerberus')}")
         self.hashed_config = None
+        self.config_file = None
         self.config = self.get_config_file()
         self.cookie = cookie
 
@@ -75,6 +79,7 @@ class cerberus(app_manager.RyuApp):
                 self.logger.error(f"Potential rollback files have been found " +
                                   f"in {rollback_directory}")
             sys.exit()
+        
         new_hashed_config = conf_parser.get_hash(config)
         prev_config = self.get_rollback_running_config(rollback_directory)
         if prev_config:
@@ -83,17 +88,20 @@ class cerberus(app_manager.RyuApp):
                 self.store_rollbacks(config_file, rollback_directory)
         else:
             self.store_rollbacks(config_file, rollback_directory)
-        self.hashed_config = conf_parser.get_hash(config)
-        links, p4_switches, switches, group_links = conf_parser.parse_config(config)
-        print(switches)
-        print('group_links')
-        print(group_links)
-        dp_id_to_sw = self.associate_dp_id_to_swname(switches)
-        parsed_config = {"links": links,
-                         "p4_switches": p4_switches,
-                         "switches": switches,
-                         "group_links": group_links,
-                         "dp_id_to_sw_name": dp_id_to_sw}
+        # self.hashed_config = conf_parser.get_hash(OrderedDict(config))
+        # print(self.hashed_config)
+        # self.config_file = config
+        # links, p4_switches, switches, group_links = conf_parser.parse_config(config)
+        # print(switches)
+        # print('group_links')
+        # print(group_links)
+        # dp_id_to_sw = self.associate_dp_id_to_swname(switches)
+        # parsed_config = {"links": links,
+        #                  "p4_switches": p4_switches,
+        #                  "switches": switches,
+        #                  "group_links": group_links,
+        #                  "dp_id_to_sw_name": dp_id_to_sw}
+        parsed_config = self.set_up_config_to_be_active(config)
         return parsed_config
 
     @set_ev_cls(dpset.EventDP, dpset.DPSET_EV_DISPATCHER)
@@ -748,7 +756,7 @@ class cerberus(app_manager.RyuApp):
         return data
 
 
-    def store_rollbacks(self, config_file: str, rollback_directory: str):
+    def store_rollbacks(self, config_file, rollback_directory: str):
         """ Stores the running config file in the rollback area, and move the 
             previous running config to rollback """
         try:
@@ -1165,6 +1173,143 @@ class cerberus(app_manager.RyuApp):
     def get_switches(self):
         json_string = self.config['switches']
         return json_string
+
+
+    def config_hashes_matches(self, config: dict, old_config: dict=None) ->bool:
+        """ Transforms config to a hash and compare it with the existing one
+
+        Args:
+            config (dict): New config to compare hash with
+            old_config (dict): Optional old config to compare with
+        Returns:
+            bool: Whether config matches
+        """
+        conf_parser = Parser(self.logname)
+        sorted_config =  OrderedDict(config.items())
+        new_conf_hash = conf_parser.get_hash(sorted_config)
+        hash_to_compare = None
+        if old_config:
+            print('Old config specified and will be checked')
+            hash_to_compare = conf_parser.get_hash(OrderedDict(old_config.items()))
+        elif self.hashed_config:
+            print('Hashed config found and will be checked')
+            hash_to_compare = self.hashed_config
+        elif self.config_file:
+            print('previous config found and will be checked')
+            hash_to_compare = conf_parser.get_hash(OrderedDict(self.config_file))
+        
+        if not hash_to_compare:
+            return False
+        print(f"Old hash:{new_conf_hash}")
+        print(f"New hash:{hash_to_compare}")
+        if new_conf_hash == hash_to_compare:
+            return True
+        return False
+
+
+    def compare_new_config_with_stored_config(self, config):
+        """[summary]
+
+        Args:
+            config (dict): New config to compare with the existing config
+        """
+        conf_parser = Parser(self.logname)
+        print("Config stored api called. Find request below")
+        print(str(config))
+        print(self.config_file)
+        print(json.loads(config))
+        config = json.loads(config)
+        msg = ""
+
+        try:
+            Validator().check_config(config, self.logname)
+            
+        except Exception as err:
+            msg = f"Config did not have a valid config. {err}"
+            return {"resp": msg}
+        matches = self.config_hashes_matches(config)
+        if matches:
+            msg = "The configs match. No changes where made"
+        else:
+            msg = "The hashes do not match"
+            changes = self.find_differences_in_configs(config, self.config_file)
+            msg = {'The following changes were found in the config': changes}
+            self.store_rollbacks(self.config_file, self.rollback_dir)
+            # self.hashed_config = conf_parser.get_hash(OrderedDict(config))
+            # self.config_file = config
+            # links, p4_switches, switches, group_links = conf_parser.parse_config(config)
+            # dp_id_to_sw = self.associate_dp_id_to_swname(switches)
+            # parsed_config = {"links": links,
+            #                  "p4_switches": p4_switches,
+            #                  "switches": switches,
+            #                  "group_links": group_links,
+            #                  "dp_id_to_sw_name": dp_id_to_sw}
+            # self.config = parsed_config
+            self.config = self.set_up_config_to_be_active(config)
+            self.send_flow_stats_request(ev.dp)
+            self.send_group_desc_stats_request(ev.dp)
+        return{"resp": msg}
+        # matches = self.config_hashes_matches(config)
+
+
+    def set_up_config_to_be_active(self, config):
+        """ Helper to make config the new active config """
+        conf_parser = Parser(self.logname)
+        self.hashed_config = conf_parser.get_hash(OrderedDict(config))
+        self.config_file = config
+        links, p4_switches, switches, group_links = conf_parser.parse_config(config)
+        dp_id_to_sw = self.associate_dp_id_to_swname(switches)
+        parsed_config = {"links": links,
+                         "p4_switches": p4_switches,
+                         "switches": switches,
+                         "group_links": group_links,
+                         "dp_id_to_sw_name": dp_id_to_sw}
+        return parsed_config
+
+
+    def find_differences_in_configs(self, new_config, old_config):
+        """ More fine grained check to find differences between configs and
+            report changes back
+
+        Args:
+            new_config (dict): [description]
+            old_config (dict): [description]
+
+        Returns:
+            [type]: [description]
+        """
+        changes = []
+
+        if not self.config_hashes_matches(new_config['switch_matrix'], old_config['switch_matrix']):
+            changes.append("Changes were found in the switch matrix")
+        if not self.compare_hosts_matrix_hashes(new_config['hosts_matrix'], 
+                                                old_config['hosts_matrix']):
+            changes.append("Changes were found in the hosts matrix")
+
+        return changes
+    
+
+    def compare_hosts_matrix_hashes(self, new_hosts_matrix, old_hosts_matrix):
+        """ Make a hash of the old and new hosts matrices and compares the 
+            hashes to see if a difference can be found
+
+        Args:
+            new_hosts_matrix (list): New hosts list to compare
+            old_hosts_matrix (list): Old hosts list to compare
+        
+        Return:
+            bool: Whether they match or not
+        """
+        conf_parser = Parser(self.logname)
+        old_hosts_sorted = sorted(old_hosts_matrix, key=lambda k: k['name'])
+        new_hosts_sorted = sorted(new_hosts_matrix, key=lambda k: k['name'])
+        old_hosts_hash = conf_parser.get_hash(old_hosts_sorted)
+        new_hosts_hash = conf_parser.get_hash(new_hosts_sorted)
+
+        if old_hosts_hash == new_hosts_hash:
+            return True
+        return False
+
 
     def setup_logger(self, loglevel=logging.INFO,
                      logfile=DEFAULT_LOG_FILE, quiet=False):

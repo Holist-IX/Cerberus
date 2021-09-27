@@ -309,8 +309,7 @@ class Parser():
 
     def get_hash(self, config):
         """ Stores the config as a hash, for quick comparisons """
-        sorted_config =  sorted(config)
-        config_serialized = json.dumps(sorted_config)
+        config_serialized = json.dumps(config)
         hashed_config = hashlib.sha256(config_serialized.encode())
         return hashed_config.hexdigest()
 
