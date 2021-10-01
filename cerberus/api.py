@@ -1,5 +1,4 @@
 import json
-from os import confstr_names
 
 from ryu.app.wsgi import ControllerBase, route
 from webob import Response
@@ -36,7 +35,16 @@ class api(ControllerBase):
             # if req.body:
             #     args = json.loads(req.body.decode('utf-8'))
             return Response(content_type='application/json',
-                            json=self.app.compare_new_config_with_stored_config(req.body))
+                            json=self.app.push_new_config(req.body))
         except:
             return Response(status=500,
                             json={"error": traceback.format_exc()})
+                            
+    @route("cerberus", "/api/get_config", methods=['GET'])
+    def get_running_config(self, req, **kwargs):
+        args = {}
+        try:
+            return Response(content_type='application/json', 
+                            json=self.app.get_running_config())
+        except:
+            return Response(status=500, json={"error": traceback.format_exc()})
