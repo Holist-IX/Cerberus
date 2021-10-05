@@ -88,24 +88,12 @@ class cerberus(app_manager.RyuApp):
         new_hashed_config = conf_parser.get_hash(config)
         prev_config = self.get_rollback_running_config(rollback_directory)
         if prev_config:
-            old_conf_hash = conf_parser.get_hash(prev_config)
-            if old_conf_hash != new_hashed_config:
+            self.logger.info(f"Previous config has been found")
+            if not self.config_hashes_matches(config, prev_config):
+                self.logger.info(f"Changes found, storing old config as backup")
                 self.store_rollbacks(config_file, rollback_directory)
         else:
             self.store_rollbacks(config_file, rollback_directory)
-        # self.hashed_config = conf_parser.get_hash(OrderedDict(config))
-        # print(self.hashed_config)
-        # self.config_file = config
-        # links, p4_switches, switches, group_links = conf_parser.parse_config(config)
-        # print(switches)
-        # print('group_links')
-        # print(group_links)
-        # dp_id_to_sw = self.associate_dp_id_to_swname(switches)
-        # parsed_config = {"links": links,
-        #                  "p4_switches": p4_switches,
-        #                  "switches": switches,
-        #                  "group_links": group_links,
-        #                  "dp_id_to_sw_name": dp_id_to_sw}
         parsed_config = self.set_up_config_to_be_active(config)
         return parsed_config
 
@@ -166,18 +154,6 @@ class cerberus(app_manager.RyuApp):
         dp_id = dp.id
         stat: ofproto_v1_3_parser.OFPFlowStats
         for stat in ev.msg.body:
-            # flows.append('table_id=%s '
-            #              'duration_sec=%d duration_nsec=%d '
-            #              'priority=%d '
-            #              'idle_timeout=%d hard_timeout=%d flags=0x%04x '
-            #              'cookie=%d packet_count=%d byte_count=%d '
-            #              'match=%s instructions=%s' %
-            #              (stat.table_id,
-            #               stat.duration_sec, stat.duration_nsec,
-            #               stat.priority,
-            #               stat.idle_timeout, stat.hard_timeout, stat.flags,
-            #               stat.cookie, stat.packet_count, stat.byte_count,
-            #               stat.match, stat.instructions))
             flow = {"table_id": stat.table_id, "match": stat.match,
                     "instructions": stat.instructions, "cookie": stat.cookie}
             flows.append(flow)
@@ -295,7 +271,6 @@ class cerberus(app_manager.RyuApp):
                 sw_link = group_links[dp_name][target_dp_id]
                 sw_link = self.find_link_backup_group(dp_name, sw_link,
                                                         links, group_links)
-
                 self.add_group(datapath, sw_link, target_dp_id)
 
             else:
@@ -621,6 +596,7 @@ class cerberus(app_manager.RyuApp):
             actions.append(ofproto_parser.OFPInstructionGotoTable(OUT_TABLE))
         self.add_flow(datapath, match, actions, IN_TABLE, cookie, priority)
 
+
     def add_flow(self, datapath, match, actions, table, cookie=DEFAULT_COOKIE,
                  priority=DEFAULT_PRIORITY):
         """ Helper to a flow to the switch """
@@ -748,8 +724,16 @@ class cerberus(app_manager.RyuApp):
         try:
             with open(config_file) as json_file:
                 data = json.load(json_file)
-        except (UnicodeDecodeError, PermissionError, ValueError) as err:
+        except (UnicodeDecodeError, PermissionError) as err:
             self.logger.error(f"Error in config file: {config_file}\n{err}")
+            sys.exit()
+        except ValueError as err:
+            if os.path.getsize(config_file) == 0:
+                self.logger.error(f"Error in opening config file: {config_file}"
+                                  f"\nEnsure that the config file is not empty")
+            else:
+                self.logger.error(f"There was a problem in the config file: "
+                                  f"{config_file}\n{err}")
             sys.exit()
         except (FileNotFoundError) as err:
             self.logger.error(f"File not found: {config_file}\n")
@@ -765,7 +749,7 @@ class cerberus(app_manager.RyuApp):
     def store_config(self, config, config_file_path: str):
         try:
             with open(config_file_path, 'w') as json_file:
-                self.loggger.debug('Writing new config to be used as main config')    
+                self.logger.debug('Writing new config to be used as main config')
                 json.dump(config, json_file, indent=2)
         except FileNotFoundError:
             self.logger.error(f"The file at {config_file_path} does not exist")
@@ -774,29 +758,41 @@ class cerberus(app_manager.RyuApp):
                               f"{config_file_path}:\n{err}")
 
 
+    def copy_config_file_to_running(self, config_file, rollback_directory):
+
+        now = datetime.now()
+        datefmt = "%Y-%m-%dT%H:%M:%S"
+        running_conf_fname = f"{now.strftime(datefmt)}.running"
+        rollback_fname = f"{rollback_directory}/{running_conf_fname}"
+        self.logger.info(f"Copying over {config_file} to {rollback_fname}")
+        shutil.copy(config_file, rollback_fname)
+
+
     def store_rollbacks(self, config_file, rollback_directory: str):
         """ Stores the running config file in the rollback area, and move the
             previous running config to rollback """
+        now = datetime.now()
+        datefmt = "%Y-%m-%dT%H:%M:%S"
+        running_conf_fname = f"{now.strftime(datefmt)}.running"
+        rollback_fname = f"{rollback_directory}/{running_conf_fname}"
         try:
             file_list = os.listdir(rollback_directory)
-            if len(file_list) > 1:
+            self.logger.debug(f'There are {len(file_list)} files in the rollback directory')
+            if len(file_list) > 0:
                 rollback_files = [f for f in file_list if f.endswith('.rollback')]
                 running_files = [f for f in file_list if f.endswith('.running')]
 
                 if len(rollback_files) > 0:
-                    rollback_file = rollback_files[0]
-                    self.move_rollback_conf_to_backups(
-                        f"{rollback_directory}/{rollback_file}")
+                    self.logger.debug(f"There are {len(rollback_files)} rollback files in the rollback directory")
+                    for rollback_file in rollback_files:
+                        self.move_rollback_conf_to_backups(
+                            f"{rollback_directory}/{rollback_file}")
                 if len(running_files) > 0:
-                    running_file = running_files[0]
-                    self.move_running_conf_to_rollback(
-                        f"{rollback_directory}/{running_file}")
-            now = datetime.now()
-            datefmt = "%Y-%m-%dT%H:%M:%S"
-            running_conf_fname = f"{now.strftime(datefmt)}.running"
-            rollback_fname = f"{rollback_directory}/{running_conf_fname}"
-            self.logger.debug(f"Copying over {config_file} to {rollback_fname}")
-            shutil.copy(config_file, rollback_fname)
+                    self.logger.debug(f"There are {len(running_files)} running files in the rollback directory")
+                    for running_file in running_files:
+                        self.move_running_conf_to_rollback(
+                            f"{rollback_directory}/{running_file}")
+            self.copy_config_file_to_running(config_file, rollback_directory)
         except Exception as err:
             self.logger.error("Error storing rollback")
             self.logger.error(f"confname: {config_file}\n "
@@ -809,7 +805,7 @@ class cerberus(app_manager.RyuApp):
         """ Stores the last rollback config to the list of backup files """
         try:
             cleaned_roll_back_name = f"{rollback_file.split('.')[0]}.json"
-            self.logger.debug(f"Moving file {rollback_file} to"
+            self.logger.info(f"Moving file {rollback_file} to"
                               f" {cleaned_roll_back_name}")
             shutil.move(rollback_file, cleaned_roll_back_name)
         except Exception as err:
@@ -822,7 +818,7 @@ class cerberus(app_manager.RyuApp):
         """ Sores the last running config to be the rollback config """
         try:
             new_rollback_name = f"{running_file.split('.')[0]}.rollback"
-            self.logger.debug(f"Moving file {running_file} to"
+            self.logger.info(f"Moving file {running_file} to"
                               f" {new_rollback_name}")
             shutil.move(running_file, new_rollback_name)
         except Exception as err:
@@ -832,20 +828,21 @@ class cerberus(app_manager.RyuApp):
 
 
     def rollback_API_config(self, config, failed_config_directory):
-        
+
         current_main_config_stored = self.open_config_file(self.config_file_path)
-        self.write_failed_config_to_failed_dir(config, self.failed_directory)
+        self.write_failed_config_to_failed_dir(config, failed_config_directory)
+        prev_config = self.get_rollback_running_config(self.rollback_dir)
         if self.config_hashes_matches(config, current_main_config_stored):
-            prev_config = self.get_rollback_running_config(self.rollback_dir)
             if prev_config and self.config_hashes_matches(config, prev_config):
                 prev_config = self.get_rollback_running_config(self.rollback_dir, False)
-            self.logger.debug("Reverting changes made to running config file")
+            self.logger.info("Reverting changes made to running config file")
             self.store_config(prev_config, self.config_file_path)
         if self.config_hashes_matches(config, self.config_file):
-            self.logger.debug("Restoring config used in cerberus to rollback config")
+            self.logger.info("Restoring config used in cerberus to rollback config")
             self.config = self.set_up_config_to_be_active(prev_config)
 
-    def write_failed_config_to_failed_dir(self, config: dict, 
+
+    def write_failed_config_to_failed_dir(self, config: dict,
                                           failed_conf_directory: str):
         try:
             filename = f"{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}.failed_config"
@@ -950,25 +947,21 @@ class cerberus(app_manager.RyuApp):
         if rollback_file is None:
             rollback_config = self.get_rollback_running_config(rollback_dir)
             if self.config_hashes_matches(self.config, rollback_config):
-                rollback_config = self.get_rollback_running_config(rollback_dir, 
+                rollback_config = self.get_rollback_running_config(rollback_dir,
                                                                    False)
             if rollback_config is None:
                 return
-            if from_api:
-                self.write_failed_config_to_failed_dir()
-
         pass
-
 
 
     def get_file_to_rollback_to(self, rollback_directory,
                                 rolling_back_to_last_running: bool=True,
-                                rollback_to_file: str=None) -> str:
+                                rollback_to_file: str=None):
         try:
             filepath = ""
             if not self.rollback_files_exist(rollback_directory):
                 return filepath
-            file_list = self.list_rollback_files(rollback_directory)
+            file_list = self.lists_rollback_files(rollback_directory)
             if rollback_to_file:
                 if rollback_to_file in file_list:
                     filepath = f"{rollback_directory}/{rollback_to_file}"
@@ -997,7 +990,7 @@ class cerberus(app_manager.RyuApp):
         Returns:
             [str]: [List of potential rollback files]
         """
-        file_list = os.path.listdir(rollback_directory)
+        file_list = os.listdir(rollback_directory)
         return file_list
 
 
@@ -1037,8 +1030,9 @@ class cerberus(app_manager.RyuApp):
                                                     route, links, group_links,
                                                     target_dp_id, switches)
                         buckets = self.build_group_buckets(datapath, sw_link)
-                        groups = self.assess_groups(datapath, groups, target_dp_id,
-                                                buckets, sw_link)
+                        groups = self.assess_groups(datapath, groups,
+                                                    target_dp_id, buckets,
+                                                    sw_link)
 
         if len(groups) > 1:
             for group in groups:
@@ -1299,12 +1293,13 @@ class cerberus(app_manager.RyuApp):
         return json_string
 
 
-    def push_new_config(self, config):
-
+    def push_new_config(self, raw_config):
+        config  = json.loads(raw_config)
         msg = self.compare_new_config_with_stored_config(config)
         print(msg)
         if len(msg['changes']) > 0:
             try:
+                print(config)
                 self.store_config(config, self.config_file_path)
                 self.store_rollbacks(self.config_file_path, self.rollback_dir)
                 self.config = self.set_up_config_to_be_active(config)
@@ -1316,8 +1311,7 @@ class cerberus(app_manager.RyuApp):
                     self.send_flow_stats_request(dp)
                     self.send_group_desc_stats_request(dp)
             except Exception as err:
-                # rollback_config = self.get_rollback_running_config(self, self.rollback_dir)
-                self.logger.error(f"Failed to apply new config, rolling back to" 
+                self.logger.error(f"Failed to apply new config, rolling back to"
                                   "previous working config")
                 self.logger.error(err)
                 self.rollback_API_config(config, self.failed_directory)
@@ -1370,11 +1364,6 @@ class cerberus(app_manager.RyuApp):
             config (dict): New config to compare with the existing config
         """
         conf_parser = Parser(self.logname)
-        print("Config stored api called. Find request below")
-        print(str(config))
-        print(self.config_file)
-        print(json.loads(config))
-        config = json.loads(config)
         msg = { 'status': "", 'msg': "", 'changes': [] }
 
         try:
@@ -1393,30 +1382,13 @@ class cerberus(app_manager.RyuApp):
         else:
             msg['status'] = "changed"
             msg['msg'] = "Changes have been found in the new config."
-            # msg = "The hashes do not match"
             changes = self.find_differences_in_configs(config, self.config_file)
             msg['changes'] = changes
-            # self.store_rollbacks(self.config_file, self.rollback_dir)
-            # self.hashed_config = conf_parser.get_hash(OrderedDict(config))
-            # self.config_file = config
-            # links, p4_switches, switches, group_links = conf_parser.parse_config(config)
-            # dp_id_to_sw = self.associate_dp_id_to_swname(switches)
-            # parsed_config = {"links": links,
-            #                  "p4_switches": p4_switches,
-            #                  "switches": switches,
-            #                  "group_links": group_links,
-            #                  "dp_id_to_sw_name": dp_id_to_sw}
-            # self.config = parsed_config
-            # self.config = self.set_up_config_to_be_active(config)
             for switch in self.config['switches']:
                 dpid = self.config['switches'][switch]['dp_id']
                 print(f"Found the following switch: {switch} with the "
                       f"following dpid: {dpid}")
-            # dp = self.dpset.get(dpid)
-            # self.send_flow_stats_request(ev.dp)
-            # self.send_group_desc_stats_request(ev.dp)
         return msg
-        # matches = self.config_hashes_matches(config)
 
 
     def set_up_config_to_be_active(self, config):
