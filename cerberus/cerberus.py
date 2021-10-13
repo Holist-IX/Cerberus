@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import sys
-import hashlib
 from typing import OrderedDict
 
 from cerberus.config_parser import Validator, Parser

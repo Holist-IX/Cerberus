@@ -5,7 +5,6 @@ import json
 import hashlib
 
 from cerberus.exceptions import *
-from collections import OrderedDict
 
 class Validator():
 
