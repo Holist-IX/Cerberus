@@ -1285,12 +1285,15 @@ class cerberus(app_manager.RyuApp):
         return json_string
 
     def get_switches(self):
-        json_string = self.config['switches']
-        return json_string
+        # json_string = self.config['switches']
+        return self.config['switches']
 
     def get_running_config(self):
-        json_string = json.dumps(self.config)
-        return json_string
+        # json_string = json.dumps(self.config)
+        return self.config
+
+    def get_running_config_file(self):
+         return self.config_file
 
 
     def push_new_config(self, raw_config):
