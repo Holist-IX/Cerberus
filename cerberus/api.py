@@ -50,6 +50,16 @@ class api(ControllerBase):
         self.app.logger.info(f"Request for switches was called by:\t{req.host}")
         try:
             return Response(content_type='application/json',
+                            json=self.app.get_running_config_file())
+        except:
+            return Response(status=500, json={"error": traceback.format_exc()})
+
+
+    @route("cerberus", "/api/get_full_config", methods=['GET'])
+    def get_full_config(self, req, **kwargs):
+        self.app.logger.info(f"Request for full config was called by:\t{req.host}")
+        try:
+            return Response(content_type='application/json',
                             json=self.app.get_running_config())
         except:
             return Response(status=500, json={"error": traceback.format_exc()})

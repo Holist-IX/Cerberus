@@ -276,7 +276,7 @@ class cerberus(app_manager.RyuApp):
                 route = self.find_route(links, dp_name, other_sw)
 
                 if route:
-                    sw_link = self.find_indirect_group(self, dp_name, route,
+                    sw_link = self.find_indirect_group(datapath, dp_name, route,
                                 links, group_links, target_dp_id, switches)
 
                     self.add_group(datapath, sw_link, target_dp_id)
