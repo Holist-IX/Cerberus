@@ -5,6 +5,7 @@ import json
 import hashlib
 
 from cerberus.exceptions import *
+from collections import defaultdict
 
 class Validator():
 
@@ -235,6 +236,120 @@ class Parser():
         group_links = {}
         for sw in switches:
             group_links[sw] = {}
+
+        group_links = self.setup_directly_connectecd_group_links(links, 
+                                                        switches, group_links)
+
+        group_links = self.setup_indirect_group_links(links, switches, 
+                                                      group_links)
+
+        return group_links
+
+    def setup_indirect_group_links(self, links, switches, group_links):
+        
+        isolated_switches = [s for s in group_links if len(group_links[s].values()) < 2]
+
+        for sw in switches:
+            if sw in isolated_switches:
+                val = list(group_links[sw].values())[0]
+                for other_sw, values in switches.items():
+                    if other_sw == sw:
+                        continue
+                    group_links[sw][values['dp_id']] = val['main']
+            else:
+                for other_sw, details in switches.items():
+                    if sw == other_sw:
+                        continue
+                    target_dp_id = details['dp_id']
+                    if target_dp_id in group_links[sw]:
+                        sw_link = group_links[sw][target_dp_id]
+                        sw_link = self.find_link_backup_group(sw, sw_link,
+                                                                links, group_links)
+                        group_links[sw][target_dp_id] = sw_link
+
+                    else:
+                        route = self.find_route(links, sw, other_sw)
+
+                        if route:
+                            sw_link = self.find_indirect_group(sw, route,
+                                        links, group_links, target_dp_id, switches)
+                            group_links[sw][target_dp_id] = sw_link
+        
+        return group_links
+
+    def find_link_backup_group(self, sw, link, links, group_links):
+        """ Help to fill out group details for switches directly connected """
+        other_sw = link['other_sw']
+        l = [sw, link['main'], other_sw, link['other_port']]
+        new_links = list(links)
+        new_links = self.remove_old_link_for_ff(l, new_links)
+
+        link = self.find_group_rule(new_links, sw, link, other_sw, group_links)
+
+        return link
+
+
+    def find_indirect_group(self, sw, route, links, group_links,
+                            group_id, switches):
+        """ Help to fill out group details for switches indirectly connected """
+
+        next_hop_id = switches[route[1]]['dp_id']
+        out_port = group_links[sw][next_hop_id]['main']
+        group_links[sw][group_id] = {
+                    "main": out_port,
+                    "other_sw": route[1],
+                    "other_port": group_links[sw][next_hop_id]['other_port']
+                    }
+        link = group_links[sw][group_id]
+
+        link = self.find_link_backup_group(sw, link, links, group_links)
+
+        return link
+
+
+    def remove_old_link_for_ff(self, link_to_remove, links):
+        """ Removes a local link to generate a topology with that link down and
+            determine which paths to take for redundancy """
+        new_links = list(links)
+        if link_to_remove in new_links:
+            new_links.remove(link_to_remove)
+        else:
+            li = [link_to_remove[2], link_to_remove[3],
+                link_to_remove[0], link_to_remove[1]]
+            try:
+                new_links.remove(li)
+            except:
+                self.logger.error("Error trying to remove link from the core.")
+                self.logger.error(f"Link to remove: {str(link_to_remove)}")
+                self.logger.error(f"Link Array: {str(links)}")
+        return new_links
+
+
+    def find_group_rule(self, links, sw, sw_link, target_sw, group_links):
+        """ Find the path between 2 switches and create links for them """
+        route = self.find_route(links, sw, target_sw)
+        if route:
+            backup = [v['main'] for k,v in group_links[sw].items()
+                      if route[1] == v['other_sw']]
+            sw_link['backup'] = str(backup[0])
+
+        return sw_link
+
+
+    def setup_directly_connectecd_group_links(self, links: list, switches: list,
+                                              group_links: dict):
+        """Sets up the group link rules for switches that are directly connected
+
+        Args:
+            links (list): Array of core links
+            switches (list): Array of switches
+            group_links (dict): Dictionary that contains the details on which 
+                                port the dp should use to reach another dp, 
+                                based on their group_id
+
+        Returns:
+            [type]: [description]
+        """
         for link in links:
             s1_id = switches[link[0]]['dp_id']
             s2_id = switches[link[2]]['dp_id']
@@ -245,6 +360,7 @@ class Parser():
                                               link[0], s1_id, link[1])
 
         return group_links
+
 
     def set_group_link(self, group_links, swname, own_port, dst_sw, dst_dp_id, dst_port):
         """ Helper to set main and backup paths for group link """
@@ -320,3 +436,88 @@ class Parser():
     def get_logger(self, logname):
         """ Retrieve logger """
         return logging.getLogger(logname)
+
+
+    def find_route(self, links, source_sw, target_sw):
+        """ Helper method to return a route between two switches """
+        link_nodes = self.spf_organise(links)
+        spfgraph = Graph()
+        for node in link_nodes:
+            spfgraph.add_edge(*node)
+        route = self.dijkstra(spfgraph, source_sw, target_sw)
+        return route
+
+
+    def spf_organise(self, links):
+        """ Organises the links so that can be used for the shortest path """
+        link_nodes = []
+        for link in links:
+            cost = 1000
+            link_nodes.append([link[0], link[2], cost])
+        return link_nodes
+
+
+    def dijkstra(self, graph, initial, end):
+        """ Dijkstra's algorithm used to determine shortest path """
+        # shortest paths is a dict of nodes
+        # whose value is a tuple of (previous node, weight)
+        shortest_paths = {initial: (None, 0)}
+        current_node = initial
+        visited = set()
+
+        while current_node != end:
+            visited.add(current_node)
+            destinations = graph.edges[current_node]
+            weight_to_current_node = shortest_paths[current_node][1]
+
+            for next_node in destinations:
+                weight = graph.weights[(
+                    current_node, next_node)] + weight_to_current_node
+                if next_node not in shortest_paths:
+                    shortest_paths[next_node] = (current_node, weight)
+                else:
+                    current_shortest_weight = shortest_paths[next_node][1]
+                    if current_shortest_weight > weight:
+                        shortest_paths[next_node] = (current_node, weight)
+
+            next_destinations = {
+                node: shortest_paths[node] for node in shortest_paths
+                if node not in visited}
+            if not next_destinations:
+                return None
+            # next node is the destination with the lowest weight
+            current_node = min(next_destinations,
+                               key=lambda k: next_destinations[k][1])
+
+        # Work back through destinations in shortest path
+        path = []
+        while current_node is not None:
+            path.append(current_node)
+            next_node = shortest_paths[current_node][0]
+            current_node = next_node
+        # Reverse path
+        path = path[::-1]
+        return path
+
+
+class Graph():
+    """ Graphs all possible next nodes from a node """
+    def __init__(self):
+        """
+        self.edges is a dict of all possible next nodes
+        e.g. {'X': ['A', 'B', 'C', 'E'], ...}
+        self.weights has all the weights between two nodes,
+        with the two nodes as a tuple as the key
+        e.g. {('X', 'A'): 7, ('X', 'B'): 2, ...}
+        """
+        self.edges = defaultdict(list)
+        self.weights = {}
+
+
+    def add_edge(self, from_node, to_node, weight):
+        """ Adds a new edge to existing node """
+        # Note: assumes edges are bi-directional
+        self.edges[from_node].append(to_node)
+        self.edges[to_node].append(from_node)
+        self.weights[(from_node, to_node)] = weight
+        self.weights[(to_node, from_node)] = weight

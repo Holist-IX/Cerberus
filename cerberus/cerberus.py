@@ -195,7 +195,6 @@ class cerberus(app_manager.RyuApp):
         """ Sets up the in table for the datapath """
         dp_id = datapath.id
         for switch in self.config['switches']:
-            print(f"Printing  switch: {switch}")
             if self.format_dpid(dp_id) != self.config['switches'][switch]['dp_id']:
                 group_id = self.config['switches'][switch]['dp_id']
                 self.setup_flows_for_not_direct_connections(datapath, switch, int(group_id))
@@ -249,66 +248,12 @@ class cerberus(app_manager.RyuApp):
 
     def setup_groups(self, datapath):
         """ Initial setup of the groups on the switch """
-        isolated_switches = Parser(self.logname).find_isolated_switches(self.config['group_links'])
         group_links = self.config['group_links']
-        switches = self.config['switches']
-        links = self.config['links']
         dp_name = self.config['dp_id_to_sw_name'][datapath.id]
 
         self.setup_core_in_table(datapath, dp_name)
-        if dp_name in isolated_switches:
-            for other_sw in [s for s in group_links if s != dp_name]:
-                group_id = int(switches[other_sw]['dp_id'])
-                link = self.config['group_links'][dp_name]
-                self.add_group(datapath, link, int(group_id))
-            return
-        for other_sw, details in switches.items():
-            if other_sw == dp_name:
-                continue
-            target_dp_id = details['dp_id']
-            if target_dp_id in group_links[dp_name]:
-                sw_link = group_links[dp_name][target_dp_id]
-                sw_link = self.find_link_backup_group(dp_name, sw_link,
-                                                        links, group_links)
-                self.add_group(datapath, sw_link, target_dp_id)
-
-            else:
-                route = self.find_route(links, dp_name, other_sw)
-
-                if route:
-                    sw_link = self.find_indirect_group(datapath, dp_name, route,
-                                links, group_links, target_dp_id, switches)
-
-                    self.add_group(datapath, sw_link, target_dp_id)
-
-
-    def find_link_backup_group(self, sw, link, links, group_links):
-        """ Help to fill out group details for switches directly connected """
-        other_sw = link['other_sw']
-        l = [sw, link['main'], other_sw, link['other_port']]
-        new_links = list(links)
-        new_links = self.remove_old_link_for_ff(l, new_links)
-
-        link = self.find_group_rule(new_links, sw, link, other_sw, group_links)
-
-        return link
-
-
-    def find_indirect_group(self, datapath, sw, route, links, group_links,
-                             group_id, switches):
-        """ Help to fill out group details for switches indirectly connected """
-        link = group_links[sw][group_id]
-        next_hop_id = switches[route[1]]['dp_id']
-        out_port = group_links[sw][next_hop_id]['main']
-        group_links[sw][group_id] = {
-                    "main": out_port,
-                    "other_sw": route[1],
-                    "other_port": group_links[sw][next_hop_id]['other_port']
-                    }
-
-        link = self.find_link_backup_group(sw, link, links, group_links)
-
-        return link
+        for target_dp_id, link in group_links[dp_name].items():
+            self.add_group(datapath, link, target_dp_id)
 
 
     def add_group(self, datapath: controller.Datapath, link, group_id):
@@ -640,44 +585,6 @@ class cerberus(app_manager.RyuApp):
         """ Helper to get rules and update the rules on the switch """
         pass
 
-    def remove_old_link_for_ff(self, link_to_remove, links):
-        """ Removes a local link to generate a topology with that link down and
-            determine which paths to take for redundancy """
-        new_links = list(links)
-        if link_to_remove in new_links:
-            new_links.remove(link_to_remove)
-        else:
-            li = [link_to_remove[2], link_to_remove[3],
-                link_to_remove[0], link_to_remove[1]]
-            try:
-                new_links.remove(li)
-            except:
-                self.logger.error("Error trying to remove link from the core.")
-                self.logger.error(f"Link to remove: {str(link_to_remove)}")
-                self.logger.error(f"Link Array: {str(links)}")
-        return new_links
-
-
-    def find_group_rule(self, links, sw, sw_link, target_sw, group_links):
-        """ Find the path between 2 switches and create links for them """
-        route = self.find_route(links, sw, target_sw)
-        if route:
-            backup = [v['main'] for k,v in group_links[sw].items()
-                      if route[1] == v['other_sw']]
-            sw_link['backup'] = str(backup[0])
-
-        return sw_link
-
-
-    def find_route(self, links, source_sw, target_sw):
-        """ Helper method to return a route between two switches """
-        link_nodes = self.spf_organise(links)
-        spfgraph = Graph()
-        for node in link_nodes:
-            spfgraph.add_edge(*node)
-        route = self.dijkstra(spfgraph, source_sw, target_sw)
-        return route
-
 
     def setup_core_in_table(self, datapath, switch):
         """ Initial setup flows for in table """
@@ -996,6 +903,7 @@ class cerberus(app_manager.RyuApp):
     def compare_and_update_groups(self, datapath: controller.Datapath, groups):
         """ Compares pulled rules with generated rules to see if they need to
             be added,updated or removed """
+        config_parser = Parser(self.logname)
         group_links = self.config['group_links']
         dp_name = self.config['dp_id_to_sw_name'][datapath.id]
         switches = self.config['switches']
@@ -1016,22 +924,21 @@ class cerberus(app_manager.RyuApp):
                 if target_dp_id in group_links[dp_name]:
                     link = group_links[dp_name][target_dp_id]
                     if 'backup' not in link:
-                        link = self.find_link_backup_group(dp_name, link,
-                                                        links, group_links)
+                        link = config_parser.find_link_backup_group(dp_name, 
+                                                    link, links, group_links)
                     buckets = self.build_group_buckets(datapath, link)
                     groups = self.assess_groups(datapath, groups, target_dp_id,
                                                 buckets, link)
                 else:
-                    route = self.find_route(links, dp_name, other_sw)
+                    route = config_parser.find_route(links, dp_name, other_sw)
 
                     if route:
-                        sw_link = self.find_indirect_group(datapath, dp_name,
-                                                    route, links, group_links,
-                                                    target_dp_id, switches)
+                        sw_link = config_parser.find_indirect_group(dp_name, 
+                                                route, links, group_links, 
+                                                target_dp_id, switches)
                         buckets = self.build_group_buckets(datapath, sw_link)
                         groups = self.assess_groups(datapath, groups,
-                                                    target_dp_id, buckets,
-                                                    sw_link)
+                                    target_dp_id, buckets, sw_link)
 
         if len(groups) > 1:
             for group in groups:
@@ -1273,14 +1180,7 @@ class cerberus(app_manager.RyuApp):
 
     def hello_world(self):
         """ Hello World tester to test the API """
-        print(self.dpset)
-        for switch in self.config['switches']:
-                dpid = self.config['switches'][switch]['dp_id']
-                print(f"Found the following switch: {switch} with the "
-                      f"following dpid: {dpid}")
-                dp = self.dpset.get(dpid)
-                print(dp)
-        json_string = {"resp": "Sup"}
+        json_string = {"resp": "hello_world"}
         return json_string
 
     def get_switches(self):
@@ -1298,10 +1198,8 @@ class cerberus(app_manager.RyuApp):
     def push_new_config(self, raw_config):
         config  = json.loads(raw_config)
         msg = self.compare_new_config_with_stored_config(config)
-        print(msg)
         if len(msg['changes']) > 0:
             try:
-                print(config)
                 self.store_config(config, self.config_file_path)
                 self.store_rollbacks(self.config_file_path, self.rollback_dir)
                 self.config = self.set_up_config_to_be_active(config)
@@ -1343,13 +1241,10 @@ class cerberus(app_manager.RyuApp):
         new_conf_hash = conf_parser.get_hash(sorted_config)
         hash_to_compare = None
         if old_config:
-            print('Old config specified and will be checked')
             hash_to_compare = conf_parser.get_hash(OrderedDict(old_config.items()))
         elif self.hashed_config:
-            print('Hashed config found and will be checked')
             hash_to_compare = self.hashed_config
         elif self.config_file:
-            print('previous config found and will be checked')
             hash_to_compare = conf_parser.get_hash(OrderedDict(self.config_file))
 
         if not hash_to_compare:
@@ -1360,7 +1255,7 @@ class cerberus(app_manager.RyuApp):
 
 
     def compare_new_config_with_stored_config(self, config):
-        """[summary]
+        """Compare the new config with the one that is currently being used
 
         Args:
             config (dict): New config to compare with the existing config
@@ -1386,10 +1281,6 @@ class cerberus(app_manager.RyuApp):
             msg['msg'] = "Changes have been found in the new config."
             changes = self.find_differences_in_configs(config, self.config_file)
             msg['changes'] = changes
-            for switch in self.config['switches']:
-                dpid = self.config['switches'][switch]['dp_id']
-                print(f"Found the following switch: {switch} with the "
-                      f"following dpid: {dpid}")
         return msg
 
 
@@ -1466,78 +1357,3 @@ class cerberus(app_manager.RyuApp):
         logger.setLevel(loglevel)
 
         return logger
-
-
-    def spf_organise(self, links):
-        """ Organises the links so that can be used for the shortest path """
-        link_nodes = []
-        for link in links:
-            cost = 1000
-            link_nodes.append([link[0], link[2], cost])
-        return link_nodes
-
-
-    def dijkstra(self, graph, initial, end):
-        """ Dijkstra's algorithm used to determine shortest path """
-        # shortest paths is a dict of nodes
-        # whose value is a tuple of (previous node, weight)
-        shortest_paths = {initial: (None, 0)}
-        current_node = initial
-        visited = set()
-
-        while current_node != end:
-            visited.add(current_node)
-            destinations = graph.edges[current_node]
-            weight_to_current_node = shortest_paths[current_node][1]
-
-            for next_node in destinations:
-                weight = graph.weights[(
-                    current_node, next_node)] + weight_to_current_node
-                if next_node not in shortest_paths:
-                    shortest_paths[next_node] = (current_node, weight)
-                else:
-                    current_shortest_weight = shortest_paths[next_node][1]
-                    if current_shortest_weight > weight:
-                        shortest_paths[next_node] = (current_node, weight)
-
-            next_destinations = {
-                node: shortest_paths[node] for node in shortest_paths
-                if node not in visited}
-            if not next_destinations:
-                return None
-            # next node is the destination with the lowest weight
-            current_node = min(next_destinations,
-                               key=lambda k: next_destinations[k][1])
-
-        # Work back through destinations in shortest path
-        path = []
-        while current_node is not None:
-            path.append(current_node)
-            next_node = shortest_paths[current_node][0]
-            current_node = next_node
-        # Reverse path
-        path = path[::-1]
-        return path
-
-
-class Graph():
-    """ Graphs all possible next nodes from a node """
-    def __init__(self):
-        """
-        self.edges is a dict of all possible next nodes
-        e.g. {'X': ['A', 'B', 'C', 'E'], ...}
-        self.weights has all the weights between two nodes,
-        with the two nodes as a tuple as the key
-        e.g. {('X', 'A'): 7, ('X', 'B'): 2, ...}
-        """
-        self.edges = defaultdict(list)
-        self.weights = {}
-
-
-    def add_edge(self, from_node, to_node, weight):
-        """ Adds a new edge to existing node """
-        # Note: assumes edges are bi-directional
-        self.edges[from_node].append(to_node)
-        self.edges[to_node].append(from_node)
-        self.weights[(from_node, to_node)] = weight
-        self.weights[(to_node, from_node)] = weight
