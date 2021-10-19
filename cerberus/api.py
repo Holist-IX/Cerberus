@@ -18,7 +18,7 @@ class api(ControllerBase):
     # TODO: Remove this once cerberus becomes more stable
     @route("cerberus", "/api/hello_world", methods=['GET'])
     def hello_world(self, req: Request, **kwargs) -> Response:
-        """Hello world API call for testing purposes
+        """ Hello world API call for testing purposes
 
         Args:
             req (Request): Empty GET request
@@ -33,7 +33,7 @@ class api(ControllerBase):
 
     @route("cerberus", "/api/switches", methods=['GET'])
     def switches(self, req: Request, **kwargs )-> Response:
-        """GET all the switch objects from cerberus and how they are configured
+        """ GET all the switch objects from cerberus and how they are configured
 
         Args:
             req (Request): Empty GET request object
@@ -48,7 +48,7 @@ class api(ControllerBase):
 
     @route("cerberus", "/api/push_config", methods=['PUT'])
     def push_new_config(self, req: Request, **kwargs) -> Response:
-        """PUT request that contains new configuration to be used in cerberus
+        """ PUT request that contains new configuration to be used in cerberus
 
         Args:
             req (Request): Request containing candidate config file as JSON
@@ -67,7 +67,7 @@ class api(ControllerBase):
 
     @route("cerberus", "/api/get_config", methods=['GET'])
     def get_running_config(self, req: Request, **kwargs) -> Response:
-        """Get the current running configuration file
+        """ Get the current running configuration file
 
         Args:
             req (Request): Get request
@@ -85,13 +85,13 @@ class api(ControllerBase):
 
     @route("cerberus", "/api/get_full_config", methods=['GET'])
     def get_full_config(self, req: Request, **kwargs) -> Response:
-        """Returns the full config. Primarily for debugging purposes.
+        """ Returns the full config. Primarily for debugging purposes.
 
         Args:
             req (Request): Get Request
 
         Returns:
-            Respnse: Response containing the full config in cerberus
+            Response: Response containing the full config in cerberus
         """
         self.app.logger.info(f"Request for full config was called by:\t{req.host}")
         try:
