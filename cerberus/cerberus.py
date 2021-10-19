@@ -3,6 +3,7 @@
 from collections import defaultdict
 import logging
 import json
+from numbers import Integral
 import os
 import shutil
 import sys
@@ -69,7 +70,22 @@ class cerberus(app_manager.RyuApp):
     def get_config_file(self, config_file: str = DEFAULT_CONFIG,
                         rollback_directory: str = DEFAULT_ROLLBACK_DIR,
                         failed_directory: str = DEFAULT_FAILED_CONF_DIR):
-        """ Reads config file from file and checks it's validity """
+        """ Initial setup where configuration file is loaded
+
+        Args:
+            config_file (str, optional): Location where the configuration
+                                         file is stored.
+                                         Defaults to DEFAULT_CONFIG.
+            rollback_directory (str, optional): Location where the rollback
+                                                files are stored.
+                                                Defaults to DEFAULT_ROLLBACK_DIR.
+            failed_directory (str, optional): Loaction where the
+                                              failed configurations are stored.
+                                              Defaults to DEFAULT_FAILED_CONF_DIR.
+
+        Returns:
+            [type]: [description]
+        """
         # TODO: Get config file from env if set
         conf_parser = Parser(self.logname)
         config = self.open_config_file(config_file)
@@ -84,7 +100,6 @@ class cerberus(app_manager.RyuApp):
                                   f"in {rollback_directory}")
             sys.exit()
 
-        new_hashed_config = conf_parser.get_hash(config)
         prev_config = self.get_rollback_running_config(rollback_directory)
         if prev_config:
             self.logger.info(f"Previous config has been found")
@@ -97,8 +112,12 @@ class cerberus(app_manager.RyuApp):
         return parsed_config
 
     @set_ev_cls(dpset.EventDP, dpset.DPSET_EV_DISPATCHER)
-    def datapath_connection_handler(self, ev):
-        """ Handles connecting to switches """
+    def datapath_connection_handler(self, ev: dpset.EventDP):
+        """ Handler for when a datapath is connected
+
+        Args:
+            ev (dpset.EventDP): Event notifier that a datapath has connected
+        """
         dp_id = self.format_dpid(ev.dp.id)
         if ev.enter:
             self.logger.info(f'Datapath: {dp_id} found')
@@ -110,8 +129,14 @@ class cerberus(app_manager.RyuApp):
 
 
     def sw_already_configured(self, datapath: controller.Datapath, flows: list):
-        """ Helper to pull switch state and see if it has already been configured """
-        conf_parser = Parser(self.logname)
+        """ Checks whether a datapath is already configured.
+
+        Args:
+            datapath (controller.Datapath): The datapath that is
+                                            being configured.
+            flows (list): A list of all the OpenFlow flows that is expected to
+                          be on the switch
+        """
         dp_id = datapath.id
         sw_name = self.config['dp_id_to_sw_name'][dp_id]
 
@@ -126,7 +151,11 @@ class cerberus(app_manager.RyuApp):
 
 
     def send_group_desc_stats_request(self, datapath: controller.Datapath):
-        """ Sends request to datapath for its group stats """
+        """ Send a request to retrieve the group description statistics.
+
+        Args:
+            datapath (controller.Datapath): Datapath to send the request to.
+        """
         ofp_parser: ofproto_v1_3_parser
         ofp_parser = datapath.ofproto_parser
         ofp: ofproto_v1_3
@@ -138,15 +167,24 @@ class cerberus(app_manager.RyuApp):
 
 
     def send_flow_stats_request(self, datapath: controller.Datapath):
-        """ Sends request to the datapath for its group stats """
+        """ Send a request to retrieve the flow description statistics.
+
+        Args:
+            datapath (controller.Datapath): Datapath to send the request to.
+        """
         ofp_parser: ofproto_v1_3_parser
         ofp_parser = datapath.ofproto_parser
         req = ofp_parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(req)
 
+
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER) #type: ignore
     def flow_stats_reply_handler(self, ev):
-        """ Processes the flow stats from the datapath """
+        """ Handler for the reply of OpenFlow statistics.
+
+        Args:
+            ev (EventOFPFlowStatsReply): OpenFlow flow statistics reply.
+        """
         flows = []
         dp: controller.Datapath
         dp = ev.msg.datapath
@@ -164,9 +202,15 @@ class cerberus(app_manager.RyuApp):
         else:
             self.sw_already_configured(dp, flows)
 
+
     @set_ev_cls(ofp_event.EventOFPGroupDescStatsReply, MAIN_DISPATCHER) #type: ignore
     def group_desc_stat_reply_handler(self, ev):
-        """ Processes the group stats """
+        """ Handler for the reply of group description statistics request.
+
+        Args:
+            ev (EventOFPGroupDescStatsReply): OpenFlow group description
+                                              statistics reply.
+        """
         groups = []
         dp: controller.Datapath
         dp = ev.msg.datapath
@@ -182,8 +226,12 @@ class cerberus(app_manager.RyuApp):
             self.compare_and_update_groups(dp, groups)
 
 
-    def full_sw_setup(self, datapath):
-        """ Sets up the switch for the first time """
+    def full_sw_setup(self, datapath: controller.Datapath):
+        """ Helper function to completely setup a datapath.
+
+        Args:
+            datapath (controller.Datapath): The datapath to setup.
+        """
         dp_id = datapath.id
         # Assume that a switch with no flows have no groups
         # Groups needed for making group rules
@@ -191,36 +239,58 @@ class cerberus(app_manager.RyuApp):
         self.setup_sw_hosts(datapath)
         self.logger.info(f"Datapath: {dp_id} configured")
 
-    def setup_sw_hosts(self, datapath):
-        """ Sets up the in table for the datapath """
+    def setup_sw_hosts(self, datapath: controller.Datapath):
+        """ Configures a datapath with all the flows requried for
+            host connectivity.
+
+        Args:
+            datapath (controller.Datapath): Datapath to be configured.
+        """
         dp_id = datapath.id
         for switch in self.config['switches']:
             if self.format_dpid(dp_id) != self.config['switches'][switch]['dp_id']:
                 group_id = self.config['switches'][switch]['dp_id']
-                self.setup_flows_for_not_direct_connections(datapath, switch, int(group_id))
+                self.setup_flows_for_not_direct_connections(datapath,
+                                                            switch,
+                                                            int(group_id))
                 continue
             for port, hosts in self.config['switches'][switch]['hosts'].items():
                 for host in hosts:
                     host_name = host['name']
                     mac = host['mac']
-                    vlan_id = host['vlan'] if 'vlan' in host else None
-                    tagged = host['tagged'] if 'tagged' in host else None
-                    ipv4 = host['ipv4'] if 'ipv4' in host else None
-                    ipv6 = host['ipv6'] if 'ipv6' in host else None
-                    self.logger.info(f"Datapath: {dp_id}\tConfiguring host: " +
+                    vlan_id = host['vlan'] if 'vlan' in host else 0
+                    tagged = host['tagged'] if 'tagged' in host else False
+                    ipv4 = host['ipv4'] if 'ipv4' in host else ""
+                    ipv6 = host['ipv6'] if 'ipv6' in host else ""
+                    self.logger.info(f"Datapath: {dp_id}\tConfiguring host: "
                                      f"{host_name} on port: {port}")
-                    self.logger.debug(f"Datapath: {dp_id}\t host: {host_name} "+
-                                      f"has mac: {mac}\tvlan: {vlan_id}\t" +
-                                      f"tagged: {tagged}\tipv4: {ipv4}\t" +
+                    self.logger.debug(f"Datapath: {dp_id}\t host: {host_name} "
+                                      f"has mac: {mac}\tvlan: {vlan_id}\t"
+                                      f"tagged: {tagged}\tipv4: {ipv4}\t"
                                       f"ipv6: {ipv6}")
                     self.add_in_flow(port, datapath, mac, vlan_id, tagged)
-                    self.setup_flows_for_direct_connect(datapath, port,
+                    self.setup_flows_for_direct_connect(datapath, int(port),
                                                         host_name, mac, vlan_id,
                                                         tagged, ipv4, ipv6)
 
-    def setup_flows_for_direct_connect(self, datapath, port, host_name, mac,
-                                       vlan_id, tagged, ipv4, ipv6):
-        """ Sets up the flows for hosts directly connected to the switch """
+
+    def setup_flows_for_direct_connect(self, datapath: controller.Datapath,
+                                       port: int, host_name: str, mac: str,
+                                       vlan_id: int, tagged: bool, ipv4: str,
+                                       ipv6: str):
+        """ Helper function to setup flows for hosts that are directly connected
+            to the datapath.
+
+        Args:
+            datapath (controller.Datapath): Datapath to configure.
+            port (int): Openflow port number that host is connected to.
+            host_name (str): Host name
+            mac (str): Mac address of the host.
+            vlan_id (str): The vlan id to use for this host.
+            tagged (bool): If connections from the host will be vlan tagged.
+            ipv4 (str): IPv4 address of the host.
+            ipv6 (str): IPv6 address of the host.
+        """
         self.add_direct_mac_flow(datapath, host_name, mac, vlan_id,
                                  tagged, port)
         self.add_direct_ipv4_flow(datapath, host_name, mac, ipv4, vlan_id,
@@ -229,9 +299,18 @@ class cerberus(app_manager.RyuApp):
                                   tagged, port)
 
 
-    def setup_flows_for_not_direct_connections(self, datapath, switch, group_id):
-        """ Sets up the flows for hosts not directly connected to the switch """
+    def setup_flows_for_not_direct_connections(self,
+                                               datapath: controller.Datapath,
+                                               switch: str, group_id: int):
+        """ Setup the flows for connections that are not directly connected to
+            the datapath.
 
+        Args:
+            datapath (controller.Datapath): Datapath to configure.
+            switch (str): Name of the destination switch that the
+                          datapath is connecting to.
+            group_id (int): The group id/datapath id of the destination switch.
+        """
         for _, hosts in self.config['switches'][switch]['hosts'].items():
                 for host in hosts:
                     host_name = host['name']
@@ -246,8 +325,12 @@ class cerberus(app_manager.RyuApp):
                     self.add_indirect_ipv6_flow(datapath, host_name, mac, ipv6,
                                                 vlan_id, group_id)
 
-    def setup_groups(self, datapath):
-        """ Initial setup of the groups on the switch """
+    def setup_groups(self, datapath: controller.Datapath):
+        """ Initial setup for all the groups of the datapath.
+
+        Args:
+            datapath (controller.Datapath): The datapath to configure.
+        """
         group_links = self.config['group_links']
         dp_name = self.config['dp_id_to_sw_name'][datapath.id]
 
@@ -256,8 +339,16 @@ class cerberus(app_manager.RyuApp):
             self.add_group(datapath, link, target_dp_id)
 
 
-    def add_group(self, datapath: controller.Datapath, link, group_id):
-        """ Helper to build group and add the group to the datapath """
+    def add_group(self, datapath: controller.Datapath,
+                  link: dict, group_id: int):
+        """ Helper fucntion to build and add groups to the datapath.
+
+        Args:
+            datapath (controller.Datapath): The datapath to configure.
+            link (dict): Link dictionary that contains the main and backup
+                         ports to use to send traffic to the destination datapath.
+            group_id (int): Group id of the the destination datapath.
+        """
         ofproto: ofproto_v1_3
         ofproto = datapath.ofproto
         ofproto_parser: ofproto_v1_3_parser
@@ -269,8 +360,15 @@ class cerberus(app_manager.RyuApp):
         datapath.send_msg(msg)
 
 
-    def update_group(self, datapath: controller.Datapath, buckets, group_id):
-        """ Helper to update an existing group on the datapath """
+    def update_group(self, datapath: controller.Datapath, buckets: dict,
+                     group_id: int) -> None:
+        """ Helper function to update groups in the datapath.
+
+        Args:
+            datapath (controller.Datapath): Datapath to update.
+            buckets (dict): New bucket config to use.
+            group_id (int): Group id that will be updated.
+        """
         ofproto: ofproto_v1_3
         ofproto = datapath.ofproto
         ofproto_parser: ofproto_v1_3_parser
@@ -281,8 +379,13 @@ class cerberus(app_manager.RyuApp):
         datapath.send_msg(msg)
 
 
-    def remove_group(self, datapath, group_id):
-        """ Helper to remove an existing group from the datapath """
+    def remove_group(self, datapath: controller.Datapath, group_id: int):
+        """ Helper function to remove groups from the datapath
+
+        Args:
+            datapath (controller.Datapath): Datapath to remove groups from.
+            group_id (int): The id of the group to remove.
+        """
         ofproto: ofproto_v1_3
         ofproto = datapath.ofproto
         ofproto_parser: ofproto_v1_3_parser
@@ -293,8 +396,17 @@ class cerberus(app_manager.RyuApp):
         datapath.send_msg(msg)
 
 
-    def build_group_buckets(self, datapath: controller.Datapath, link: dict):
-        """ build the groups rule to send to the switch """
+    def build_group_buckets(self, datapath: controller.Datapath, link: dict)-> \
+                            "list[ofproto_v1_3_parser.OFPBucket]":
+        """ Build the failover buckets for a link.
+
+        Args:
+            datapath (controller.Datapath): Datapath to build buckets for.
+            link (dict): Group link dictionary.
+
+        Returns:
+            list[ofproto_v1_3_parser.OFPBucket]: List of failover buckets.
+        """
         ofproto_parser: ofproto_v1_3_parser
         ofproto_parser = datapath.ofproto_parser
         main_port = int(link['main'])
@@ -308,19 +420,49 @@ class cerberus(app_manager.RyuApp):
                                             actions=backup_actions))
         return buckets
 
-    def add_direct_mac_flow(self, datapath, host_name, mac, vid, tagged, port,
-                            priority=DEFAULT_PRIORITY, cookie=DEFAULT_COOKIE):
-        """ Add mac flow for directly connected host """
+
+    def add_direct_mac_flow(self, datapath: controller.Datapath, host_name: str,
+                            mac: str, vid: int, tagged: bool, port: int,
+                            priority: int=DEFAULT_PRIORITY,
+                            cookie: int=DEFAULT_COOKIE):
+        """ Helper function for adding a flow for a mac address of a host that
+            is directly connected to the datapath.
+
+        Args:
+            datapath (controller.Datapath): Datapath to add the flow to.
+            host_name (str): Host name of the destination host.
+            mac (str): Host's mac address.
+            vid (str): VLAN ID of the destination host.
+            tagged (bool): If the flow should be tagged with a VLAN.
+            port (int): Port the host is connected to.
+            priority (int, optional): The priority of the flow. \
+                                      Defaults to DEFAULT_PRIORITY.
+            cookie (int, optional): The cookie to use when adding the flow. \
+                                    Defaults to DEFAULT_COOKIE.
+        """
         match, instructions = self.build_direct_mac_flow_out(datapath, mac, vid,
                                                              tagged, port)
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
 
 
-    def build_direct_mac_flow_out(self, datapath: controller.Datapath, mac, vid,
-                                  tagged, port):
-        """ Builds match and instructions for the out table for mac of hosts
-            that are directly connected """
-        ofproto: ofproto_v1_3
+    def build_direct_mac_flow_out(self, datapath: controller.Datapath, mac: str,
+            vid: int, tagged: bool, port: int):
+        """ Builds match and instructions on the out table for a host's mac
+            address that is directly connected to the datapath.
+
+        Args:
+            datapath (controller.Datapath): Datapath to add the flow to.
+            mac (str): Host's mac address.
+            vid (int): Peering vlan ID of the destination host.
+            tagged (bool): If the flow needs to be tagged.
+            port (int): Port the host is connected to.
+        Returns:
+            match, instructions \
+                (tuple[ofproto_v1_3_parser.OFPMatch, \
+                 list[ofproto_v1_3_parser.OFPInstructionActions]]): \
+                    Tuple of the match and instructions.
+        """
+
         ofproto = datapath.ofproto
         ofproto_parser: ofproto_v1_3_parser
         ofproto_parser = datapath.ofproto_parser
@@ -338,10 +480,24 @@ class cerberus(app_manager.RyuApp):
                             actions)]
         return match, instructions
 
-    def build_direct_mac_flow_in(self, datapath: controller.Datapath, mac, vid,
-                                 tagged, port):
-        """ Builds match and instructions for the in table for mac of hosts that
-            are directly connected"""
+    def build_direct_mac_flow_in(self, datapath: controller.Datapath, mac: str,
+                                 vid: int, tagged: bool, port: int):
+        """ Builds match and instructions on the in table for a host's mac
+            address that is directly connected to the datapath.
+
+        Args:
+            datapath (controller.Datapath): The datapath to configure.
+            mac (str): Host's mac address.
+            vid (int): Peering vlan ID of the host.
+            tagged (bool): If the hosts connection will be tagged.
+            port (int): Port of the host.
+
+        Returns:
+            match, instructions \
+                (tuple[ofproto_v1_3_parser.OFPMatch, \
+                 list[ofproto_v1_3_parser.OFPInstructionActions]]): \
+                    Tuple of the match and instructions.
+        """
         ofproto: ofproto_v1_3
         ofproto = datapath.ofproto
         ofproto_parser: ofproto_v1_3_parser
@@ -368,19 +524,52 @@ class cerberus(app_manager.RyuApp):
         return match, instructions
 
 
-    def add_direct_ipv4_flow(self, datapath, host_name, mac, ipv4, vid, tagged,
-                             port, priority=DEFAULT_PRIORITY,
-                             cookie=DEFAULT_COOKIE):
-        """ Add ipv4 arp rule for directly connected host """
+    def add_direct_ipv4_flow(self, datapath: controller.Datapath,
+                             host_name: str, mac: str, ipv4: str, vid: int,
+                             tagged: bool, port: int,
+                             priority: int=DEFAULT_PRIORITY,
+                             cookie: int=DEFAULT_COOKIE):
+        """ Helper function for adding a arp flow rule for a IPv4 address of a
+            host that is directly connected to the datapath.
+
+        Args:
+            datapath (controller.Datapath): Datapath to add the flow to.
+            host_name (str): Host name of the destination host.
+            mac (str): Host's mac address.
+            ipv4 (str): Host's ipv4 address.
+            vid (int): Peering vlan id to use.
+            tagged (bool): If the flow should be tagged.
+            port (int): Port the host is connected to.
+            priority (int, optional): The priority of the flow. \
+                                      Defaults to DEFAULT_PRIORITY.
+            cookie (int, optional): The cookie to use when adding the flow. \
+                                    Defaults to DEFAULT_COOKIE.
+        """
         match, instructions = self.build_direct_ipv4_out(datapath, mac, ipv4,
                                                          vid, tagged, port)
+        # Add ipv4 arp rule for directly connected host
         self.add_flow(datapath, match, instructions, OUT_TABLE, cookie, priority)
 
 
-    def build_direct_ipv4_out(self, datapath: controller.Datapath, mac, ipv4,
-                              vid, tagged, port):
-        """ Builds match and instructions for the in table for ipv4 of hosts
-            that are directly connected"""
+    def build_direct_ipv4_out(self, datapath: controller.Datapath, mac: str,
+                              ipv4:str, vid: int, tagged: bool, port: int):
+        """ Builds the match and instructions on the out table for a host with
+            a ipv4 address that is directly connected to the datapath.
+
+        Args:
+            datapath (controller.Datapath): Datapath to add the flow to.
+            mac (str): Host's mac address.
+            ipv4 (str): Host's ipv4 address.
+            vid (int): Peering vlan of the host.
+            tagged (bool): If a flow needs to be tagged.
+            port (int): The port that the host is connected to.
+
+        Returns:
+            match, instructions \
+                (tuple[ofproto_v1_3_parser.OFPMatch, \
+                 list[ofproto_v1_3_parser.OFPInstructionActions]]): \
+                    Tuple of the match and instructions.
+        """
         ofproto: ofproto_v1_3
         ofproto = datapath.ofproto
         ofproto_parser: ofproto_v1_3_parser
@@ -924,7 +1113,7 @@ class cerberus(app_manager.RyuApp):
                 if target_dp_id in group_links[dp_name]:
                     link = group_links[dp_name][target_dp_id]
                     if 'backup' not in link:
-                        link = config_parser.find_link_backup_group(dp_name, 
+                        link = config_parser.find_link_backup_group(dp_name,
                                                     link, links, group_links)
                     buckets = self.build_group_buckets(datapath, link)
                     groups = self.assess_groups(datapath, groups, target_dp_id,
@@ -933,8 +1122,8 @@ class cerberus(app_manager.RyuApp):
                     route = config_parser.find_route(links, dp_name, other_sw)
 
                     if route:
-                        sw_link = config_parser.find_indirect_group(dp_name, 
-                                                route, links, group_links, 
+                        sw_link = config_parser.find_indirect_group(dp_name,
+                                                route, links, group_links,
                                                 target_dp_id, switches)
                         buckets = self.build_group_buckets(datapath, sw_link)
                         groups = self.assess_groups(datapath, groups,
@@ -984,10 +1173,10 @@ class cerberus(app_manager.RyuApp):
         """ Helper function to see if a host exists on the switch """
         host_name = host['name']
         mac = host['mac']
-        vlan_id = host['vlan'] if 'vlan' in host else None
-        tagged = host['tagged'] if 'tagged' in host else None
-        ipv4 = host['ipv4'] if 'ipv4' in host else None
-        ipv6 = host['ipv6'] if 'ipv6' in host else None
+        vlan_id = host['vlan'] if 'vlan' in host else 0
+        tagged = host['tagged'] if 'tagged' in host else False
+        ipv4 = host['ipv4'] if 'ipv4' in host else ""
+        ipv6 = host['ipv6'] if 'ipv6' in host else ""
 
         mac_result, flows = self.check_mac_flow_exist(datapath,
                                         mac, vlan_id, tagged, port,
