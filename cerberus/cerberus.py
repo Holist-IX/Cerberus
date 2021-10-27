@@ -788,7 +788,7 @@ class cerberus(app_manager.RyuApp):
             if dp_id == self.config['switches'][sw]['dp_id']:
                 return True
 
-        self.logger.warning(f'Datapath: {dp_id}\t has not been configured.')
+        self.logger.warning(f'Datapath: {dp_id} has not been configured.')
         return False
 
 
@@ -922,8 +922,15 @@ class cerberus(app_manager.RyuApp):
             self.logger.error(err)
 
 
-    def rollback_API_config(self, config, failed_config_directory):
+    def rollback_API_config(self, config: dict, failed_config_directory: str):
+        """ Rolls back a config update attempt back to a the last known
+            working configuration that cerberus used
 
+        Args:
+            config (dict): Config that was used to update
+            failed_config_directory (str): Directory where the failed config \
+                is to be stored.
+        """
         current_main_config_stored = self.open_config_file(self.config_file_path)
         self.write_failed_config_to_failed_dir(config, failed_config_directory)
         prev_config = self.get_rollback_running_config(self.rollback_dir)
@@ -935,6 +942,7 @@ class cerberus(app_manager.RyuApp):
         if self.config_hashes_matches(config, self.config_file):
             self.logger.info("Restoring config used in cerberus to rollback config")
             self.config = self.set_up_config_to_be_active(prev_config)
+        self.send_flow_and_group_requests()
 
 
     def write_failed_config_to_failed_dir(self, config: dict,
@@ -1392,13 +1400,15 @@ class cerberus(app_manager.RyuApp):
                 self.store_config(config, self.config_file_path)
                 self.store_rollbacks(self.config_file_path, self.rollback_dir)
                 self.config = self.set_up_config_to_be_active(config)
-                for switch in self.config['switches']:
-                    dpid = self.config['switches'][switch]['dp_id']
-                    dp = self.dpset.get(dpid)
-                    # Need to send flow stats request which will trigger a flow
-                    # table update
-                    self.send_flow_stats_request(dp)
-                    self.send_group_desc_stats_request(dp)
+                # Need to get flow rules to update the config on switches
+                self.send_flow_stats_request()
+                # for switch in self.config['switches']:
+                #     dpid = self.config['switches'][switch]['dp_id']
+                #     dp = self.dpset.get(dpid)
+                #     # Need to send flow stats request which will trigger a flow
+                #     # table update
+                #     self.send_flow_stats_request(dp)
+                #     self.send_group_desc_stats_request(dp)
             except Exception as err:
                 self.logger.error(f"Failed to apply new config, rolling back to"
                                   "previous working config")
@@ -1411,6 +1421,31 @@ class cerberus(app_manager.RyuApp):
                 msg['changes'] = []
 
         return msg
+
+    # TODO: Change to accept parameters and rollback to specific verison
+    def api_rollback_to_last_config(self):
+        """ Helper function for the API to rollback the running configuration to
+            the last known running config.
+        """
+        current_stored_config = self.open_config_file(self.config_file_path)
+        prev_config = self.get_rollback_running_config(self.rollback_dir)
+        if self.config_hashes_matches(current_stored_config, self.config_file):
+            self.write_failed_config_to_failed_dir(current_stored_config, self.failed_directory)
+            if prev_config and self.config_hashes_matches(self.config_file, prev_config):
+                prev_config = self.get_rollback_running_config(self.rollback_dir, False)
+        if prev_config:
+            self.logger.info("Reverting changes made to running config file")
+            self.store_config(prev_config, self.config_file_path)
+            self.store_rollbacks(self.config_file_path, self.rollback_dir)
+            self.config = self.set_up_config_to_be_active(prev_config)
+            # Need to get flow rules to update the config on switches
+            self.send_flow_and_group_requests()
+            return({"resp": "Cerberus config has been successfully rolled back."})
+        self.logger.info("Failed to roll back configuration due to no file "
+                         "being available to roll back to.")
+        return({"resp": "There were no configs found to revert to, cerberus "
+                        "config remains unchanged"})
+
 
 ################################################################
 # API CALLS SECTION END
@@ -1443,13 +1478,26 @@ class cerberus(app_manager.RyuApp):
         return False
 
 
+    def send_flow_and_group_requests(self):
+        """ Helper function that sends a flow and group requests to each of the
+            datapaths that has been configured.
+        """
+        for switch in self.config['switches']:
+            for switch in self.config['switches']:
+                dpid = self.config['switches'][switch]['dp_id']
+                dp = self.dpset.get(dpid)
+                # Need to send flow stats request which will trigger a flow
+                # table update
+                self.send_flow_stats_request(dp)
+                self.send_group_desc_stats_request(dp)
+
+
     def compare_new_config_with_stored_config(self, config):
         """Compare the new config with the one that is currently being used
 
         Args:
             config (dict): New config to compare with the existing config
         """
-        conf_parser = Parser(self.logname)
         msg = { 'status': "", 'msg': "", 'changes': [] }
 
         try:

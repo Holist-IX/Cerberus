@@ -99,3 +99,14 @@ class api(ControllerBase):
                             json=self.app.get_running_config())
         except:
             return Response(status=500, json={"error": traceback.format_exc()})
+
+
+    @route("cerberus", "/api/rollback_to_last_config")
+    def rollback_to_last_config(self, req: Request, **kwargs) -> Response:
+
+        self.app.logger.info(f"Request to rollback to last config was called by:\t{req.host}")
+        try:
+            return Response(content_type='application/json',
+                            json=self.app.api_rollback_to_last_config())
+        except:
+            return Response(status=500, json={"error": traceback.format_exc()})
