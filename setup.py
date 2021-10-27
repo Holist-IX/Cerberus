@@ -7,7 +7,7 @@ from setuptools import setup
 from pkg_resources import resource_filename
 from shutil import copyfile
 
-DESCRIPTION = "Proactive layer 2 Openflow Controller"
+DESCRIPTION = "Proactive Openflow Controller for layer 2 networks"
 
 
 def setup_configs():
@@ -57,10 +57,13 @@ def setup_configs():
 
 
 setup(
-    name='cerberus',
+    name='cerberus-controller',
     author="Christoff Visser",
     author_email="christoff@iij.ad.jp",
-    setup_requires=['pbr>=1.9', 'setuptools>=17.1'],
+    description=DESCRIPTION,
+    url='https://github.com/Holist-IX/cerberus',
+    setup_requires=['pbr>=1.9', 'setuptools>=17.1',
+                    'ryu>=4.34', 'eventlet==0.30.2'],
     python_requires='>=3.8',
     keywords=['OpenFLow','SDN','P4'],
     pbr=True

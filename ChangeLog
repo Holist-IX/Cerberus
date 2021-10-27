@@ -1,8 +1,19 @@
 CHANGES
 =======
 
-* Seperate parser to it's own file
-* Cleaned up config parser
-* Ported config parser from Athos
-* Initial setup
-* Initial commit
+* Initial release
+
+This is the initial release of Cerbererus. It contains the Cerbererus OpenFlow
+controller for configuring layer 2 networks in a proactive fasion.
+
+Features include:
+
+* Basic API support
+    * Update network configuration
+    * Pull current network configuration
+* Rollback support
+    * Rollback to the last working network configuration
+    * Old configs are kept, so there are multiple network configurations to rollback to
+* Fail state support
+    * When a deployment fails, the network is rolled back to the last network configuration
+    * Failed configs are kept seperately
