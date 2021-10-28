@@ -1520,8 +1520,9 @@ class cerberus(app_manager.RyuApp):
             dp = self.dpset.get(dpid)
             # Need to send flow stats request which will trigger a flow
             # table update
-            self.send_flow_stats_request(dp)
-            self.send_group_desc_stats_request(dp)
+            if dp:
+                self.send_flow_stats_request(dp)
+                self.send_group_desc_stats_request(dp)
 
 
     def compare_new_config_with_stored_config(self, config):
