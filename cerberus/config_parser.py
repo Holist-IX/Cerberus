@@ -11,7 +11,7 @@ class Validator():
 
     def __init__(self) -> None:
         pass
-    
+
     def check_config(self, config, logname):
         """ Checks if the config file is valid """
         logger = self.get_logger(logname)
@@ -40,7 +40,7 @@ class Validator():
             if "interfaces" not in host:
                 raise ConfigError(f"{err_msg} Host has no interfaces")
             self.check_host_interfaces(err_msg, host)
-        
+
 
     def check_host_interfaces(self, err_msg, host):
         """ Parse and validates the host's interfaces """
@@ -62,7 +62,7 @@ class Validator():
                 raise ConfigError(f"{err_msg}. It has neither an IPv4" +
                                     " or IPv6 address\n")
             if "mac" not in iface:
-                iface["mac"] = self.check_for_available_mac(err_msg, iface, 
+                iface["mac"] = self.check_for_available_mac(err_msg, iface,
                                                             host["interfaces"])
             self.check_mac_address(err_msg, iface["mac"])
             if "vlan" in iface:
@@ -146,7 +146,7 @@ class Validator():
         else:
             for _, dp_id in sw_matrix["dp_ids"].items():
                 if not int(dp_id):
-                    raise ConfigError(f"{err_msg}Please ensure that dp_ids are"+ 
+                    raise ConfigError(f"{err_msg}Please ensure that dp_ids are"+
                                       f" valid numbers.\n dp_id found: {dp_id}")
 
 
@@ -166,21 +166,21 @@ class Validator():
         """ Helper to check if ports are valid """
         self.check_port_number(port, err_msg)
         self.check_valid_port_range(port, err_msg)
-    
-    
+
+
     def check_valid_port_range(self, port, err_msg):
         """ Checks if the port is a valid number for Umbrella """
         if port < 0 or port > 255:
-            raise ConfigError(f"{err_msg} Invalid port number detected. Ensure"+ 
+            raise ConfigError(f"{err_msg} Invalid port number detected. Ensure"+
                               " that port numbers are between 0 and 255\n"
                               f"Found port: {port}")
 
     def check_port_number(self, port, err_msg):
         """ Checks if the port is a number """
         if type(port) != int or type(port) != int:
-            int(port)            
+            int(port)
             if type(port) != int:
-                ValueError(f"{err_msg} Port must be a number.\n" + 
+                ValueError(f"{err_msg} Port must be a number.\n" +
                            f"Found port{port}")
 
 
@@ -193,7 +193,7 @@ class Parser():
     def __init__(self, logname='parser'):
         self.logger = self.get_logger(logname)
 
-    
+
     def parse_config(self, config):
         """ Helper to get all information needed to  """
         links = self.get_links(config)
@@ -218,7 +218,7 @@ class Parser():
         if "p4" in config['switch_matrix']:
             return config['switch_matrix']['p4']
         return None
-    
+
     def setup_base_switch_dictionary(self, config):
         """ Sets up the base dictionary per switch """
         switches = {}
@@ -227,26 +227,26 @@ class Parser():
             switches[sw]['dp_id'] = self.format_dpid(dp_id)
             switches[sw]['name'] = sw
             switches[sw]['hosts'] = {}
-        
+
         return switches
 
-    
+
     def setup_group_links(self, links, switches):
         """ Setup the group links """
         group_links = {}
         for sw in switches:
             group_links[sw] = {}
 
-        group_links = self.setup_directly_connectecd_group_links(links, 
+        group_links = self.setup_directly_connectecd_group_links(links,
                                                         switches, group_links)
 
-        group_links = self.setup_indirect_group_links(links, switches, 
+        group_links = self.setup_indirect_group_links(links, switches,
                                                       group_links)
 
         return group_links
 
     def setup_indirect_group_links(self, links, switches, group_links):
-        
+
         isolated_switches = [s for s in group_links if len(group_links[s].values()) < 2]
 
         for sw in switches:
@@ -274,7 +274,7 @@ class Parser():
                             sw_link = self.find_indirect_group(sw, route,
                                         links, group_links, target_dp_id, switches)
                             group_links[sw][target_dp_id] = sw_link
-        
+
         return group_links
 
     def find_link_backup_group(self, sw, link, links, group_links):
@@ -343,8 +343,8 @@ class Parser():
         Args:
             links (list): Array of core links
             switches (list): Array of switches
-            group_links (dict): Dictionary that contains the details on which 
-                                port the dp should use to reach another dp, 
+            group_links (dict): Dictionary that contains the details on which
+                                port the dp should use to reach another dp,
                                 based on their group_id
 
         Returns:
@@ -354,7 +354,7 @@ class Parser():
             s1_id = switches[link[0]]['dp_id']
             s2_id = switches[link[2]]['dp_id']
 
-            group_links = self.set_group_link(group_links, link[0], link[1], 
+            group_links = self.set_group_link(group_links, link[0], link[1],
                                               link[2], s2_id, link[3])
             group_links = self.set_group_link(group_links, link[2], link[3],
                                               link[0], s1_id, link[1])
@@ -373,7 +373,7 @@ class Parser():
         """ Helper to find switches with only one core connection """
         isolated_switches = [s for s in group_links if len(group_links[s].values()) < 2]
         return isolated_switches
-    
+
     def link_hosts_to_switches(self, config, switches):
         """ Configures the switches dictionary with hosts connected to it """
         for host in config['hosts_matrix']:
@@ -393,24 +393,24 @@ class Parser():
                 member = self.find_and_add_vlan(iface, member)
                 switches[iface['switch']]['hosts'][iface['swport']].append(member)
         return switches
-                                
+
 
     def find_and_add_mac(self, iface, member):
         """ Finds if mac in iface and adds it to the dictionary """
         if 'mac' in iface:
-            member['mac'] = iface['mac']             
+            member['mac'] = iface['mac']
         return member
 
     def find_and_add_v4(self, iface, member):
         """ Finds if ipv4 in iface and adds it to the dictionary """
         if 'ipv4' in iface:
-            member['ipv4'] = iface['ipv4']             
+            member['ipv4'] = iface['ipv4']
         return member
 
     def find_and_add_v6(self, iface, member):
         """ Finds if ipv6 in iface and adds it to the dictionary """
         if 'ipv6' in iface:
-            member['ipv6'] = iface['ipv6']             
+            member['ipv6'] = iface['ipv6']
         return member
 
 
