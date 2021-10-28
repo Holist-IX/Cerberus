@@ -1,17 +1,17 @@
 # Cerberus
 
-Cerberus is an OpenFlow controller for OpenFlow 1.3 switches, focusing on 
+Cerberus is an OpenFlow controller for OpenFlow 1.3 switches, focusing on
 layer-2 switching. Cerberus takes a proactive approach to network configuration
 and only allows connections to hosts that are already configured. By taking a
 proactive approach to network configuration, Cerberus takes multicast traffic
-and translates it to unicast. This eliminates MAC leanring happening on the 
-switches themselves. Cerberus is build on top of the 
+and translates it to unicast. This eliminates MAC leanring happening on the
+switches themselves. Cerberus is build on top of the
 [Ryu OpenFlow Controller](https://ryu.readthedocs.io/en/latest/index.html).
 
-The primary design principles oof Cerberus is to reduce as much complexity 
+The primary design principles oof Cerberus is to reduce as much complexity
 within a network, and to have as little impact as possible on a running network.
 This means that a switch is largely configured as a "set and forget". Cerberus
-will periodically check in if the switch state matches the expected state, but 
+will periodically check in if the switch state matches the expected state, but
 there is no network learning happening from the switches.
 
 ## Features
@@ -27,22 +27,24 @@ there is no network learning happening from the switches.
 
 ## Installation
 
-Currently installation is only supported for building locally. This can be 
-achieved by running either in the build directory:
+Cerberus can be installed as follows:
 
-`pip install .`
+``` bash
+% pip install cerberus-controller
+```
 
-or 
+You can also install Cerberus from the source code if you prefer via:
 
-`python3 setup.py install`
+```
+% git clone https://github/Holist-IX/cerberus/
+% cd cerberus; pip install .
+```
 
-The older `setup.py` script will also setup the default logging and 
-configurations for you. Official pip support coming soon.
 
 ## Configuration
 
-The default configuration is located at `/etc/cerberus/topology.json`, with 
-older configs stored at `/etc/cerberus/rollback/` and failed configs will 
+The default configuration is located at `/etc/cerberus/topology.json`, with
+older configs stored at `/etc/cerberus/rollback/` and failed configs will
 be stored at `/etc/cerberus/failed/`.
 
 Below is a sample of the topology config:
@@ -89,5 +91,5 @@ Below is a sample of the topology config:
 ## Support
 
 You can contact us via twiiter [@IxHolist](https://twitter.com/IxHolist).
-If you encounter any bugs please open an issue. For more information go to our 
+If you encounter any bugs please open an issue. For more information go to our
 [site](https://holistix.iijlab.net/)

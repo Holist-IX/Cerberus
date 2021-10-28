@@ -11,6 +11,7 @@ Features include:
 * Basic API support
     * Update network configuration
     * Pull current network configuration
+    * Rollback to a previous configuration
 * Rollback support
     * Rollback to the last working network configuration
     * Old configs are kept, so there are multiple network configurations to rollback to
