@@ -3,10 +3,11 @@
 from collections import defaultdict
 import logging
 import json
-from numbers import Integral
 import os
 import shutil
 import sys
+import time
+import threading
 from typing import OrderedDict
 
 from cerberus.config_parser import Validator, Parser
@@ -33,6 +34,7 @@ DEFAULT_LOG_FILE = "/var/log/cerberus/cerberus.log"
 DEFAULT_ROLLBACK_DIR = "/etc/cerberus/rollback"
 DEFAULT_FAILED_CONF_DIR = "/etc/cerberus/failed"
 DEFAULT_COOKIE = 525033
+DEFAULT_INTERVAL = 30
 
 FLOW_NOT_FOUND = 0
 FLOW_EXISTS = 1
@@ -50,7 +52,8 @@ class cerberus(app_manager.RyuApp):
 
     def __init__(self, cookie=DEFAULT_COOKIE, config_file_path=DEFAULT_CONFIG,
                  log_path=DEFAULT_LOG_FILE, rollback_dir=DEFAULT_ROLLBACK_DIR,
-                 failed_directory=DEFAULT_FAILED_CONF_DIR, *_args, **_kwargs):
+                 failed_directory=DEFAULT_FAILED_CONF_DIR,
+                 update_interval=DEFAULT_INTERVAL, *_args, **_kwargs):
         super(cerberus, self).__init__(*_args, **_kwargs)
         self.wsgi = _kwargs['wsgi']
         self.wsgi.register(api, {'cerberus_main': self})
@@ -66,6 +69,9 @@ class cerberus(app_manager.RyuApp):
         self.config_file = None
         self.config = self.get_config_file()
         self.cookie = cookie
+        self.update_interval = update_interval
+        self.start_background_thread(self.update_interval)
+
 
     def get_config_file(self, config_file: str = DEFAULT_CONFIG,
                         rollback_directory: str = DEFAULT_ROLLBACK_DIR,
@@ -110,6 +116,7 @@ class cerberus(app_manager.RyuApp):
             self.store_rollbacks(config_file, rollback_directory)
         parsed_config = self.set_up_config_to_be_active(config)
         return parsed_config
+
 
     @set_ev_cls(dpset.EventDP, dpset.DPSET_EV_DISPATCHER)
     def datapath_connection_handler(self, ev: dpset.EventDP):
@@ -208,7 +215,7 @@ class cerberus(app_manager.RyuApp):
         """ Handler for the reply of group description statistics request.
 
         Args:
-            ev (EventOFPGroupDescStatsReply): OpenFlow group description
+            ev (EventOFPGroupDescStatsReply): OpenFlow group description \
                                               statistics reply.
         """
         groups = []
@@ -224,6 +231,32 @@ class cerberus(app_manager.RyuApp):
             self.setup_groups(dp)
         else:
             self.compare_and_update_groups(dp, groups)
+
+
+    def start_background_thread(self, interval: int):
+        """ Helper to start background thread to check state of datapaths.
+
+        Args:
+            interval (int): Time interval in seconds for polling
+        """
+        update_thread = threading.Thread(target = self.threading_start,
+                                         args=([interval]))
+
+        update_thread.start()
+
+
+    def threading_start(self, interval: int):
+        """ Thread to periodically check the state of the datapaths.
+
+        Args:
+            interval (int): Time interval in seconds on
+        """
+        # Initial wait time to make sure that the switches are configured first
+        time.sleep(120)
+        while True:
+            # Need to get flow states to initiate updating
+            self.send_flow_and_group_requests()
+            time.sleep(interval)
 
 
     def full_sw_setup(self, datapath: controller.Datapath):
@@ -1483,13 +1516,12 @@ class cerberus(app_manager.RyuApp):
             datapaths that has been configured.
         """
         for switch in self.config['switches']:
-            for switch in self.config['switches']:
-                dpid = self.config['switches'][switch]['dp_id']
-                dp = self.dpset.get(dpid)
-                # Need to send flow stats request which will trigger a flow
-                # table update
-                self.send_flow_stats_request(dp)
-                self.send_group_desc_stats_request(dp)
+            dpid = self.config['switches'][switch]['dp_id']
+            dp = self.dpset.get(dpid)
+            # Need to send flow stats request which will trigger a flow
+            # table update
+            self.send_flow_stats_request(dp)
+            self.send_group_desc_stats_request(dp)
 
 
     def compare_new_config_with_stored_config(self, config):
