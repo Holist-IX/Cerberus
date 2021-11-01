@@ -1,6 +1,7 @@
 import traceback
 import json
 
+from cerberus.exceptions import *
 from ryu.app.wsgi import ControllerBase, route
 from webob import Response, Request
 
@@ -58,8 +59,15 @@ class api(ControllerBase):
         """
         self.app.logger.info(f"A config update was sent in by:\t{req.host}")
         try:
+            if not req.body:
+                err_msg = ("The request body was empty. Ensure that the new "
+                           "configuration is attached to your PUT reequst. "
+                           "There was no configuration pushed to the network.")
+                raise EmptyConfigError(err_msg)
             return Response(content_type='application/json',
                             json=self.app.push_new_config(req.body))
+        except EmptyConfigError as err:
+            return Response(status=500, json={"error": str(err)})
         except:
             return Response(status=500,
                             json={"error": traceback.format_exc()})
