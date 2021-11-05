@@ -3,7 +3,7 @@
 import argparse
 import os
 import sys
-import importlib
+from importlib.metadata import version
 
 
 def parse_args(sys_args):
@@ -45,8 +45,7 @@ def parse_args(sys_args):
 
 
 def print_version():
-    version = importlib.metadata.version('cerberus')
-    print(f"Cerberus: {version}")
+    print(f"Cerberus: {version('cerberus-controller')}")
     sys.exit()
 
 

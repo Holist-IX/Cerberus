@@ -1,6 +1,5 @@
 """ Proactive layer 2 Openflow Controller """
 
-import importlib
 import json
 import logging
 import os
@@ -15,6 +14,7 @@ from cerberus.config_parser import Validator, Parser
 from cerberus.exceptions import *
 from cerberus.api import api
 from datetime import datetime
+from importlib_metadata import version
 from ryu.app.wsgi import WSGIApplication
 from ryu.base import app_manager
 from ryu.controller import ofp_event, dpset, controller
@@ -49,7 +49,7 @@ class cerberus(app_manager.RyuApp):
     """
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
     _CONTEXTS = {'dpset': dpset.DPSet, 'wsgi': WSGIApplication}
-    __version__ = importlib.metadata.version('cerberus')
+    __version__ = version('cerberus-controller')
 
     def __init__(self, cookie=DEFAULT_COOKIE, config_file_path=DEFAULT_CONFIG,
                  log_path=DEFAULT_LOG_FILE, rollback_dir=DEFAULT_ROLLBACK_DIR,
