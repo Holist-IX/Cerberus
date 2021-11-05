@@ -3,12 +3,12 @@
 import argparse
 import os
 import sys
-from pbr.version import VersionInfo
+import importlib
 
 
 def parse_args(sys_args):
-    """ Parse Arguments for Cerberus 
-    
+    """ Parse Arguments for Cerberus
+
     Args:
         sys_args (sys.args): System arguments to parse
 
@@ -45,8 +45,8 @@ def parse_args(sys_args):
 
 
 def print_version():
-    version = VersionInfo('cerberus')
-    print(f"Cerberus {version}")
+    version = importlib.metadata.version('cerberus')
+    print(f"Cerberus: {version}")
     sys.exit()
 
 
@@ -56,7 +56,7 @@ def main():
 
     if args.version:
         print_version()
-    
+
     os.execvp('ryu-manager', ['ryu-manager', "cerberus.cerberus"])
 
 

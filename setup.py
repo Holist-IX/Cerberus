@@ -2,7 +2,6 @@
 
 import errno
 import os
-import sys
 from setuptools import setup
 from pkg_resources import resource_filename
 from shutil import copyfile
@@ -12,12 +11,12 @@ DESCRIPTION = "Proactive Openflow Controller for layer 2 networks"
 
 def setup_configs():
     """ Sets up the defualt log and config paths """
-    log_dir = '/var/log/cerberus/'
+    log_dir = '/var/log/cerberus'
     athos_log = os.path.join(log_dir, 'cerberus.log')
-    conf_dir = '/etc/cerberus/'
+    conf_dir = '/etc/cerberus'
     conf_file = os.path.join(conf_dir, 'topology.json')
-    rollback_dir = '/etc/cerberus/rollback/'
-    failed_dir = '/etc/cerberus/failed/'
+    rollback_dir = '/etc/cerberus/rollback'
+    failed_dir = '/etc/cerberus/failed'
     umbrella_json = os.path.join(conf_dir, 'umbrella.json')
     defualt_umbrella = resource_filename(__name__, 'etc/cerberus/umbrella.json')
     default_conf = resource_filename(__name__, 'etc/cerberus/topology.json')
@@ -54,6 +53,8 @@ def setup_configs():
                     "Are you running as root?")
         else:
             raise
+    except Exception as exc_info:
+        print(f"Error setting up default configs.\nError:\n{exc_info}")
 
 
 setup(
@@ -62,7 +63,7 @@ setup(
     author_email="christoff@iij.ad.jp",
     description=DESCRIPTION,
     url='https://github.com/Holist-IX/cerberus',
-    setup_requires=['pbr>=1.9', 'setuptools>=17.1',
+        setup_requires=['pbr>=1.9', 'setuptools>=17.1',
                     'ryu>=4.34', 'eventlet==0.30.2'],
     python_requires='>=3.8',
     keywords=['OpenFLow','SDN','P4'],
