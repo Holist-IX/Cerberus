@@ -14,7 +14,7 @@ from cerberus.config_parser import Validator, Parser
 from cerberus.exceptions import *
 from cerberus.api import api
 from datetime import datetime
-from importlib_metadata import version
+from importlib.metadata import version
 from ryu.app.wsgi import WSGIApplication
 from ryu.base import app_manager
 from ryu.controller import ofp_event, dpset, controller
