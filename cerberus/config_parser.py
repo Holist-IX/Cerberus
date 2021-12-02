@@ -255,7 +255,7 @@ class Parser():
                 for other_sw, values in switches.items():
                     if other_sw == sw:
                         continue
-                    group_links[sw][values['dp_id']] = val['main']
+                    group_links[sw][values['dp_id']] = val
             else:
                 for other_sw, details in switches.items():
                     if sw == other_sw:
@@ -263,10 +263,12 @@ class Parser():
                     target_dp_id = details['dp_id']
                     if target_dp_id in group_links[sw]:
                         sw_link = group_links[sw][target_dp_id]
-                        sw_link = self.find_link_backup_group(sw, sw_link,
+                        new_link = self.find_link_backup_group(sw, sw_link,
                                                                 links, group_links)
-                        group_links[sw][target_dp_id] = sw_link
-
+                        if new_link is not None:
+                            group_links[sw][target_dp_id] = new_link
+                        else:
+                            group_links[sw][target_dp_id] = sw_link
                     else:
                         route = self.find_route(links, sw, other_sw)
 
@@ -279,6 +281,8 @@ class Parser():
 
     def find_link_backup_group(self, sw, link, links, group_links):
         """ Help to fill out group details for switches directly connected """
+        if 'other_sw' not in link:
+            return None
         other_sw = link['other_sw']
         l = [sw, link['main'], other_sw, link['other_port']]
         new_links = list(links)
