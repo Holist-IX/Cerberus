@@ -327,9 +327,11 @@ class cerberus(app_manager.RyuApp):
         """
         self.add_direct_mac_flow(datapath, host_name, mac, vlan_id,
                                  tagged, port)
-        self.add_direct_ipv4_flow(datapath, host_name, mac, ipv4, vlan_id,
+        if ipv4:
+            self.add_direct_ipv4_flow(datapath, host_name, mac, ipv4, vlan_id,
                                   tagged, port)
-        self.add_direct_ipv6_flow(datapath, host_name, mac, ipv6, vlan_id,
+        if ipv6:
+            self.add_direct_ipv6_flow(datapath, host_name, mac, ipv6, vlan_id,
                                   tagged, port)
 
 
@@ -354,10 +356,12 @@ class cerberus(app_manager.RyuApp):
                     ipv6 = host['ipv6'] if 'ipv6' in host else None
                     self.add_indirect_mac_flow(datapath, host_name, mac,
                                                vlan_id, group_id)
-                    self.add_indirect_ipv4_flow(datapath, host_name, mac, ipv4,
-                                                vlan_id, group_id)
-                    self.add_indirect_ipv6_flow(datapath, host_name, mac, ipv6,
-                                                vlan_id, group_id)
+                    if ipv4:
+                        self.add_indirect_ipv4_flow(datapath, host_name, mac,
+                                                ipv4, vlan_id, group_id)
+                    if ipv6:
+                        self.add_indirect_ipv6_flow(datapath, host_name, mac,
+                                            ipv6, vlan_id, group_id)
 
     def setup_groups(self, datapath: controller.Datapath):
         """ Initial setup for all the groups of the datapath.
@@ -610,9 +614,10 @@ class cerberus(app_manager.RyuApp):
         ofproto_parser = datapath.ofproto_parser
         match = None
         actions = []
+        clean_ip = self.clean_ip_address(ipv4)
         match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
                                         eth_type=ether_types.ETH_TYPE_ARP,
-                                        arp_tpa=self.clean_ip_address(ipv4))
+                                        arp_tpa=clean_ip)
         if not tagged:
             actions.append(ofproto_parser.OFPActionPopVlan())
         actions.append(ofproto_parser.OFPActionSetField(eth_dst=mac))
@@ -643,10 +648,11 @@ class cerberus(app_manager.RyuApp):
         ofproto_parser = datapath.ofproto_parser
         match = None
         actions = []
+        clean_ip = self.clean_ip_address(ipv6)
         match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
                                     icmpv6_type=135, ip_proto=58,
                                     eth_type=34525,
-                                    ipv6_nd_target=self.clean_ip_address(ipv6))
+                                    ipv6_nd_target=clean_ip)
         if not tagged:
             actions.append(ofproto_parser.OFPActionPopVlan())
         actions.append(ofproto_parser.OFPActionSetField(eth_dst=mac))
@@ -703,10 +709,10 @@ class cerberus(app_manager.RyuApp):
         ofproto_parser = datapath.ofproto_parser
         match = None
         instructions = []
-
+        clean_ip = self.clean_ip_address(ipv4)
         match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
                                         eth_type=ether_types.ETH_TYPE_ARP,
-                                        arp_tpa=self.clean_ip_address(ipv4))
+                                        arp_tpa=clean_ip)
 
         instructions = [ofproto_parser.OFPInstructionActions(
                             ofproto.OFPIT_APPLY_ACTIONS,
@@ -734,11 +740,11 @@ class cerberus(app_manager.RyuApp):
         ofproto_parser = datapath.ofproto_parser
         match = None
         instructions = []
-
+        clean_ip = self.clean_ip_address(ipv6)
         match = ofproto_parser.OFPMatch(vlan_vid=(ofproto.OFPVID_PRESENT | vid),
                                         icmpv6_type=135, ip_proto=58,
                                         eth_type=34525,
-                                        ipv6_nd_target=self.clean_ip_address(ipv6))
+                                        ipv6_nd_target=clean_ip)
 
         instructions = [ofproto_parser.OFPInstructionActions(
                             ofproto.OFPIT_APPLY_ACTIONS,
