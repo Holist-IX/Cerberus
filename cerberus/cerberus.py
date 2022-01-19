@@ -7,7 +7,6 @@ import shutil
 import sys
 import time
 import threading
-import pdb
 from typing import OrderedDict
 
 from collections import defaultdict
@@ -65,8 +64,7 @@ class cerberus(app_manager.RyuApp):
         self.config_file_path = config_file_path
         self.failed_directory = failed_directory
         self.log_path = log_path
-        # TODO: Change log level back to info
-        self.logger = self.setup_logger(logfile = self.log_path, loglevel=logging.DEBUG)
+        self.logger = self.setup_logger(logfile = self.log_path, loglevel=logging.INFO)
         self.logger.info(f"Starting Cerberus {cerberus.__version__}")
         self.hashed_config = None
         self.config_file = None
@@ -171,6 +169,10 @@ class cerberus(app_manager.RyuApp):
         if len(flows) > 0:
             self.logger.debug(f"There are still some flows left on the "
                               f"switch {sw_name}\nFlows:{flows}")
+            self.logger.debug("Unrecognised flows will be removed")
+            for flow in flows:
+                self.remove_flow(datapath, flow['match'], flow['instructions'],
+                                 flow['table_id'])
 
 
     def send_group_desc_stats_request(self, datapath: controller.Datapath):
@@ -1242,10 +1244,17 @@ class cerberus(app_manager.RyuApp):
     def buckets_groups_match(self, groups, group_id, buckets):
         """ Checks to ensure that the group on the switch matches the
             expected group """
-
-        for group in groups:
-            if group_id == group['group_id'] and buckets == group['buckets']:
-                return True
+        for group in ( g for g in groups if g['group_id'] == group_id):
+            for bucket in buckets:
+                bucket_actions = bucket.actions.__str__()
+                for pulled_bucket in group['buckets']:
+                    pulled_actions = pulled_bucket.actions.__str__()
+                    actions_match = bucket_actions == pulled_actions
+                    wp_match = bucket.watch_port == pulled_bucket.watch_port
+                    wg_match = bucket.watch_group == pulled_bucket.watch_group
+                    if actions_match and wp_match and wg_match:
+                        groups.remove(group)
+                        return True
         return False
 
 
@@ -1260,7 +1269,6 @@ class cerberus(app_manager.RyuApp):
                 flow_exists = True
                 flows.remove(flow)
                 return flow_exists, flows
-        pdb.set_trace()
         return flow_exists, flows
 
 
@@ -1410,8 +1418,8 @@ class cerberus(app_manager.RyuApp):
                 return exists, flows
 
             if exists != FLOW_EXISTS:
-                self.logger.debug('Mac flow not found: %s', mac)
-                pdb.set_trace()
+                self.logger.debug(f'Datapath: {datapath.id} Mac not found in '
+                                  f'IN_TABLE: {mac}')
 
             flows.remove(flow)
             out_match, out_inst = self.build_direct_mac_flow_out(datapath, mac,
@@ -1457,19 +1465,12 @@ class cerberus(app_manager.RyuApp):
             instructions_match = self.check_if_instructions_match(instructions,
                                                         flow['instructions'])
             if match_str == flow_match_str and instructions_match:
-                self.logger.debug("Found a full match")
                 exists = FLOW_EXISTS
                 return exists, flow
             # Only check match, since we can't update the match part
             if match == flow_match_str:
-                self.logger.debug("Found a matchflow to update")
                 exists = FLOW_TO_UPDATE
                 return exists, flow
-            # This is catching a lot of false positives
-            # if instructions_match:
-            #     self.logger.debug("Found a instruction match to delete")
-            #     exists = FLOW_OLD_DELETE
-            #     return exists, flow
         return exists, {}
 
 
