@@ -7,6 +7,7 @@ import shutil
 import sys
 import time
 import threading
+import pdb
 from typing import OrderedDict
 
 from collections import defaultdict
@@ -64,7 +65,8 @@ class cerberus(app_manager.RyuApp):
         self.config_file_path = config_file_path
         self.failed_directory = failed_directory
         self.log_path = log_path
-        self.logger = self.setup_logger(logfile = self.log_path)
+        # TODO: Change log level back to info
+        self.logger = self.setup_logger(logfile = self.log_path, loglevel=logging.DEBUG)
         self.logger.info(f"Starting Cerberus {cerberus.__version__}")
         self.hashed_config = None
         self.config_file = None
@@ -147,6 +149,16 @@ class cerberus(app_manager.RyuApp):
         """
         dp_id = datapath.id
         sw_name = self.config['dp_id_to_sw_name'][dp_id]
+        for link in (l for l in self.config['links'] if sw_name in l):
+            core_port = int(link[1]) if sw_name == link[0] else int(link[3])
+            flow_exists, flows = self.check_if_core_port_flow_exist(core_port,
+                                                datapath.ofproto_parser, flows)
+            if not flow_exists:
+                self.add_in_flow(core_port, datapath)
+                self.logger.debug(f"Core port {core_port} was not found on "
+                                  f"switch {sw_name}")
+                # Send a group stat request to ensure that groups are in sync
+                self.send_group_desc_stats_request(datapath)
 
         for switch in self.config['switches']:
             group_id = None
@@ -156,6 +168,9 @@ class cerberus(app_manager.RyuApp):
                 for host in hosts:
                     flows = self.check_if_host_in_flows(datapath, host,
                                                         port, flows, group_id)
+        if len(flows) > 0:
+            self.logger.debug(f"There are still some flows left on the "
+                              f"switch {sw_name}\nFlows:{flows}")
 
 
     def send_group_desc_stats_request(self, datapath: controller.Datapath):
@@ -208,6 +223,7 @@ class cerberus(app_manager.RyuApp):
             self.clear_flows(dp)
             self.full_sw_setup(dp)
         else:
+
             self.sw_already_configured(dp, flows)
 
 
@@ -226,7 +242,7 @@ class cerberus(app_manager.RyuApp):
         stat: ofproto_v1_3_parser.OFPGroupDescStats
         for stat in ev.msg.body:
             groups.append({"group_id": stat.group_id, "buckets": stat.buckets})
-        self.logger.info(f"Datapath: {dp_id} Groups: {groups}")
+        self.logger.debug(f"Datapath: {dp_id} Groups: {groups}")
 
         if len(groups) < 1:
             self.setup_groups(dp)
@@ -395,6 +411,8 @@ class cerberus(app_manager.RyuApp):
         msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_ADD,
                                          ofproto.OFPGT_FF, int(group_id),
                                          buckets)
+        self.logger.debug(f"Datapath: {datapath.id} is adding group {group_id}"
+                          f" with the following buckets:\n{buckets}")
         datapath.send_msg(msg)
 
 
@@ -414,6 +432,8 @@ class cerberus(app_manager.RyuApp):
         msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_MODIFY,
                                          ofproto.OFPGT_FF, int(group_id),
                                          buckets)
+        self.logger.debug(f"Datapath: {datapath.id} is updating group "
+                          f"{group_id} with the following buckets:\n{buckets}")
         datapath.send_msg(msg)
 
 
@@ -431,6 +451,8 @@ class cerberus(app_manager.RyuApp):
         msg = ofproto_parser.OFPGroupMod(datapath,
                                          command=ofproto.OFPGC_DELETE,
                                          group_id=group_id)
+        self.logger.debug(f"Datapath: {datapath.id} is deleting "
+                          f"group {group_id}")
         datapath.send_msg(msg)
 
 
@@ -770,13 +792,17 @@ class cerberus(app_manager.RyuApp):
         self.add_flow(datapath, match, actions, IN_TABLE, cookie, priority)
 
 
-    def add_flow(self, datapath, match, actions, table, cookie=DEFAULT_COOKIE,
+    def add_flow(self, datapath: controller.Datapath, match, actions, table, cookie=DEFAULT_COOKIE,
                  priority=DEFAULT_PRIORITY):
         """ Helper to a flow to the switch """
+        parser: ofproto_v1_3_parser
         parser = datapath.ofproto_parser
         flow_mod = parser.OFPFlowMod(datapath=datapath, match=match,
                                      instructions=actions, table_id=table,
                                      priority=priority, cookie=cookie)
+        self.logger.debug(f"Datapath: {datapath.id} is adding flow to "
+                          f"table: {table} with the following\n"
+                          f"Match: {match}\nActions: {actions}")
         datapath.send_msg(flow_mod)
 
 
@@ -792,6 +818,9 @@ class cerberus(app_manager.RyuApp):
                                              table_id=table_id,
                                              match=match,
                                              instructions=instructions)
+        self.logger.debug(f"Datapath: {datapath.id} is removing flow from "
+                    f"table: {table_id} matching the following\n"
+                    f"Match: {match}\nActions: {instructions}")
         datapath.send_msg(flow_mod)
 
 
@@ -807,6 +836,9 @@ class cerberus(app_manager.RyuApp):
                                              table_id=table_id,
                                              match=match,
                                              instructions=instructions)
+        self.logger.debug(f"Datapath: {datapath.id} is updating flow from "
+                    f"table: {table_id} matching the following\n"
+                    f"Match: {match}\nActions: {instructions}")
         datapath.send_msg(flow_mod)
 
 
@@ -842,6 +874,7 @@ class cerberus(app_manager.RyuApp):
                                              out_port=ofproto.OFPP_ANY,
                                              out_group=ofproto.OFPG_ANY
                                              )
+        self.logger.debug(f"Datapath: {datapath.id} is clearing all flows")
         datapath.send_msg(flow_mod)
 
 
@@ -1216,6 +1249,22 @@ class cerberus(app_manager.RyuApp):
         return False
 
 
+    def check_if_core_port_flow_exist(self, core_port, ofproto_parser, flows):
+        """ Checks if the core port has been configured to recieve packets """
+        flow_exists = False
+        match = ofproto_parser.OFPMatch(in_port=core_port)
+        match_str = match.__str__()
+        for flow in (f for f in flows if f['table_id'] == IN_TABLE):
+            flow_match_str = flow['match'].__str__()
+            if match_str == flow_match_str:
+                flow_exists = True
+                flows.remove(flow)
+                return flow_exists, flows
+        pdb.set_trace()
+        return flow_exists, flows
+
+
+    # TODO: Refactor function to something a bit nicer
     def check_if_host_in_flows(self, datapath: controller.Datapath, host, port,
                                flows, group_id=None):
         """ Helper function to see if a host exists on the switch """
@@ -1230,6 +1279,8 @@ class cerberus(app_manager.RyuApp):
                                         mac, vlan_id, tagged, port,
                                         flows, group_id)
         if mac_result == FLOW_NOT_FOUND or mac_result == FLOW_OLD_DELETE:
+            self.logger.debug(f"Datapath: {datapath.id} did not find {mac} "
+                               "and is going to add a new rule")
             if group_id:
                 self.add_indirect_mac_flow(datapath, host_name, mac,
                                            vlan_id, group_id)
@@ -1243,6 +1294,9 @@ class cerberus(app_manager.RyuApp):
                                                 mac, ipv4, vlan_id, tagged,
                                                 port, flows, group_id)
             if v4_result == FLOW_NOT_FOUND or v4_result == FLOW_OLD_DELETE:
+                self.logger.debug(f"Datapath: {datapath.id} did not find {ipv4} "
+                                  "already on the datapath and is going to "
+                                  "add a new flow")
                 if group_id:
                     self.add_indirect_ipv4_flow(datapath, host_name, mac, ipv4,
                                                 vlan_id, group_id)
@@ -1250,6 +1304,9 @@ class cerberus(app_manager.RyuApp):
                     self.add_direct_ipv4_flow(datapath, host_name, mac, ipv4,
                                               vlan_id, tagged, port)
             if v4_result == FLOW_TO_UPDATE:
+                self.logger.debug(f"Datapath: {datapath.id} found {ipv4} "
+                                  " on the datapath but it is out of sync,"
+                                  "so it will be updated")
                 if group_id:
                     match, inst = self.build_indirect_ipv4_out(datapath, mac,
                                                         ipv4, vlan_id, group_id)
@@ -1261,6 +1318,9 @@ class cerberus(app_manager.RyuApp):
             v6_result, flows = self.check_ipv6_flow_exist(datapath, mac, ipv6,
                                         vlan_id, tagged, port, flows, group_id)
             if v6_result == FLOW_NOT_FOUND or v6_result == FLOW_OLD_DELETE:
+                self.logger.debug(f"Datapath: {datapath.id} did not find {ipv6}"
+                                  " already on the datapath and is going to "
+                                  "add a new flow")
                 if group_id:
                     self.add_indirect_ipv6_flow(datapath, host_name, mac, ipv6,
                                                 vlan_id, group_id)
@@ -1268,6 +1328,9 @@ class cerberus(app_manager.RyuApp):
                     self.add_direct_ipv6_flow(datapath, host_name, mac, ipv6,
                                               vlan_id, tagged, port)
             if v6_result == FLOW_TO_UPDATE:
+                self.logger.debug(f"Datapath: {datapath.id} found {ipv6} "
+                                  " on the datapath but it is out of sync,"
+                                  "so it will be updated")
                 if group_id:
                     match, inst = self.build_indirect_ipv6_out(datapath, mac,
                                                         ipv6, vlan_id, group_id)
@@ -1292,7 +1355,8 @@ class cerberus(app_manager.RyuApp):
                                                        vlan_id, group_id)
 
         out_flows = [f for f in flows if f['table_id'] == OUT_TABLE]
-        exists, flow = self.check_if_flows_match(out_flows, match, inst)
+        exists, flow = self.check_if_flows_match(out_flows, match,
+                                                 inst, OUT_TABLE)
 
         if exists != FLOW_NOT_FOUND:
             flows.remove(flow)
@@ -1318,7 +1382,8 @@ class cerberus(app_manager.RyuApp):
 
         out_flows = [f for f in flows if f['table_id'] == OUT_TABLE]
 
-        exists, flow = self.check_if_flows_match(out_flows, match, inst)
+        exists, flow = self.check_if_flows_match(out_flows, match,
+                                                 inst, OUT_TABLE)
 
         if exists != FLOW_NOT_FOUND:
             flows.remove(flow)
@@ -1333,15 +1398,20 @@ class cerberus(app_manager.RyuApp):
                                  flows, group_id=None):
         """ Checks to see if the mac address exists in the flow table """
         exists = FLOW_NOT_FOUND
-        in_flows = [f for f in flows if ['table_id'] == IN_TABLE]
+        in_flows = [f for f in flows if f['table_id'] == IN_TABLE]
         out_flows = [f for f in flows if f['table_id'] == OUT_TABLE]
         if not group_id:
             in_match, in_inst = self.build_direct_mac_flow_in(datapath, mac,
                                                               vlan_id, tagged,
                                                               port)
-            exists, flow = self.check_if_flows_match(in_flows, in_match, in_inst)
+            exists, flow = self.check_if_flows_match(in_flows, in_match,
+                                                     in_inst, IN_TABLE)
             if exists == FLOW_NOT_FOUND:
                 return exists, flows
+
+            if exists != FLOW_EXISTS:
+                self.logger.debug('Mac flow not found: %s', mac)
+                pdb.set_trace()
 
             flows.remove(flow)
             out_match, out_inst = self.build_direct_mac_flow_out(datapath, mac,
@@ -1350,7 +1420,7 @@ class cerberus(app_manager.RyuApp):
                 self.remove_flow(datapath, flow['match'], flow['instructions'],
                                  IN_TABLE)
                 _, out_flow = self.check_if_flows_match(out_flows, out_match,
-                                                        out_inst)
+                                                        out_inst, OUT_TABLE)
                 flows.remove(out_flow)
                 self.remove_flow(datapath, out_flow['match'],
                                  out_flow['instructions'], OUT_TABLE)
@@ -1359,7 +1429,7 @@ class cerberus(app_manager.RyuApp):
             if exists == FLOW_TO_UPDATE:
                 self.update_flow(datapath, in_match, in_inst, IN_TABLE)
                 _, out_flow = self.check_if_flows_match(out_flows, out_match,
-                                                        out_inst)
+                                                        out_inst, OUT_TABLE)
                 flows.remove(out_flow)
                 self.update_flow(datapath, out_match, out_inst, OUT_TABLE)
                 return exists, flows
@@ -1368,7 +1438,8 @@ class cerberus(app_manager.RyuApp):
             out_match, out_inst = self.build_indirect_mac_flow_out(datapath, mac,
                                                             vlan_id, group_id)
 
-        exists, flow = self.check_if_flows_match(out_flows, out_match, out_inst)
+        exists, flow = self.check_if_flows_match(out_flows, out_match,
+                                                 out_inst, OUT_TABLE)
         if exists != FLOW_NOT_FOUND:
             flows.remove(flow)
         if exists == FLOW_OLD_DELETE:
@@ -1377,21 +1448,54 @@ class cerberus(app_manager.RyuApp):
         return exists, flows
 
 
-    def check_if_flows_match(self, flows, match, instructions):
+    def check_if_flows_match(self, flows, match, instructions, table_id):
         """ Helper to see if a generated flow matches a pulled one """
         exists = FLOW_NOT_FOUND
-        for flow in flows:
-            if match in flow['match'] and instructions in flow['instructions']:
+        match_str = match.__str__()
+        for flow in (f for f in flows if f['table_id'] == table_id):
+            flow_match_str = flow['match'].__str__()
+            instructions_match = self.check_if_instructions_match(instructions,
+                                                        flow['instructions'])
+            if match_str == flow_match_str and instructions_match:
+                self.logger.debug("Found a full match")
                 exists = FLOW_EXISTS
                 return exists, flow
             # Only check match, since we can't update the match part
-            if match in flow['match']:
+            if match == flow_match_str:
+                self.logger.debug("Found a matchflow to update")
                 exists = FLOW_TO_UPDATE
                 return exists, flow
-            if instructions in flow['instructions']:
-                exists = FLOW_OLD_DELETE
-                return exists, flow
+            # This is catching a lot of false positives
+            # if instructions_match:
+            #     self.logger.debug("Found a instruction match to delete")
+            #     exists = FLOW_OLD_DELETE
+            #     return exists, flow
         return exists, {}
+
+
+    def check_if_instructions_match(self, instructions: list,
+                                    flow_instructions: list):
+        """ Helper to check if the instructions generated match the
+            instructions in the flow """
+        instr_matches = False
+        for gen_instr in instructions:
+            gen_str = ""
+            if hasattr(gen_instr, 'actions'):
+                gen_str = gen_instr.actions.__str__()
+            else:
+                gen_str = gen_instr.__str__()
+
+            for pulled_instr in flow_instructions:
+                # Need to check if actions exists to get around VLAN length set
+                # in pulled rules but not in generated instructions
+                pulled_str = ""
+                if hasattr(pulled_instr, 'actions'):
+                    pulled_str = pulled_instr.actions.__str__()
+                else:
+                    pulled_str = pulled_instr.__str__()
+                if gen_str == pulled_str:
+                    instr_matches = True
+        return instr_matches
 
 
     def associate_dp_id_to_swname(self, switches):
