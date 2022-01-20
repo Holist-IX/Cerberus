@@ -1526,11 +1526,9 @@ class cerberus(app_manager.RyuApp):
         return json_string
 
     def get_switches(self):
-        # json_string = self.config['switches']
         return self.config['switches']
 
     def get_running_config(self):
-        # json_string = json.dumps(self.config)
         return self.config
 
     def get_running_config_file(self):
@@ -1547,13 +1545,7 @@ class cerberus(app_manager.RyuApp):
                 self.config = self.set_up_config_to_be_active(config)
                 # Need to get flow rules to update the config on switches
                 self.send_flow_and_group_requests()
-                # for switch in self.config['switches']:
-                #     dpid = self.config['switches'][switch]['dp_id']
-                #     dp = self.dpset.get(dpid)
-                #     # Need to send flow stats request which will trigger a flow
-                #     # table update
-                #     self.send_flow_stats_request(dp)
-                #     self.send_group_desc_stats_request(dp)
+
             except Exception as err:
                 self.logger.error(f"Failed to apply new config, rolling back to"
                                   "previous working config")
@@ -1561,7 +1553,7 @@ class cerberus(app_manager.RyuApp):
                 self.rollback_API_config(config, self.failed_directory)
                 msg['status'] = "error"
                 msg['msg'] = ("The new config could not be applied, no "
-                              "changes were made to the running config."
+                              "changes were made to the running config.\n"
                               f"Error msg: {err}")
                 msg['changes'] = []
 
