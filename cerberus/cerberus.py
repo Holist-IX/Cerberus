@@ -7,6 +7,7 @@ import shutil
 import sys
 import time
 import threading
+import pdb
 from typing import OrderedDict
 
 from collections import defaultdict
@@ -64,7 +65,8 @@ class cerberus(app_manager.RyuApp):
         self.config_file_path = config_file_path
         self.failed_directory = failed_directory
         self.log_path = log_path
-        self.logger = self.setup_logger(logfile = self.log_path, loglevel=logging.INFO)
+        self.logger = self.setup_logger(logfile=self.log_path,
+                                        loglevel=logging.INFO)
         self.logger.info(f"Starting Cerberus {cerberus.__version__}")
         self.hashed_config = None
         self.config_file = None
@@ -80,7 +82,7 @@ class cerberus(app_manager.RyuApp):
         """ Initial setup where configuration file is loaded
 
         Args:
-            config_file (str, optional): Location where the configuration
+            config_file (str, optional): Location where the configuration\
                                          file is stored.
                                          Defaults to DEFAULT_CONFIG.
             rollback_directory (str, optional): Location where the rollback
@@ -134,6 +136,9 @@ class cerberus(app_manager.RyuApp):
                 self.logger.info(f"Datapath: {dp_id} to be configured")
                 self.send_flow_stats_request(ev.dp)
                 self.send_group_desc_stats_request(ev.dp)
+            else:
+                self.logger.warning(f"Datapath: {dp_id} was not found in "
+                                    "config and will not be configured")
 
 
     def sw_already_configured(self, datapath: controller.Datapath, flows: list):
@@ -146,6 +151,8 @@ class cerberus(app_manager.RyuApp):
                           be on the switch
         """
         dp_id = datapath.id
+        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser = datapath.ofproto_parser
         sw_name = self.config['dp_id_to_sw_name'][dp_id]
         for link in (l for l in self.config['links'] if sw_name in l):
             core_port = int(link[1]) if sw_name == link[0] else int(link[3])
@@ -166,8 +173,11 @@ class cerberus(app_manager.RyuApp):
                 for host in hosts:
                     flows = self.check_if_host_in_flows(datapath, host,
                                                         port, flows, group_id)
+
+        flows = self.check_drop_rules_exists(datapath, flows)
+
         if len(flows) > 0:
-            self.logger.debug(f"There are still some flows left on the "
+            self.logger.info(f"There are still some flows left on the "
                               f"switch {sw_name}\nFlows:{flows}")
             self.logger.debug("Unrecognised flows will be removed")
             for flow in flows:
@@ -287,6 +297,7 @@ class cerberus(app_manager.RyuApp):
         dp_id = datapath.id
         # Assume that a switch with no flows have no groups
         # Groups needed for making group rules
+        self.setup_drop_rules(datapath)
         self.setup_groups(datapath)
         self.setup_sw_hosts(datapath)
         self.logger.info(f"Datapath: {dp_id} configured")
@@ -794,8 +805,8 @@ class cerberus(app_manager.RyuApp):
         self.add_flow(datapath, match, actions, IN_TABLE, cookie, priority)
 
 
-    def add_flow(self, datapath: controller.Datapath, match, actions, table, cookie=DEFAULT_COOKIE,
-                 priority=DEFAULT_PRIORITY):
+    def add_flow(self, datapath: controller.Datapath, match, actions, table,
+                 cookie=DEFAULT_COOKIE, priority=DEFAULT_PRIORITY):
         """ Helper to a flow to the switch """
         parser: ofproto_v1_3_parser
         parser = datapath.ofproto_parser
@@ -844,9 +855,50 @@ class cerberus(app_manager.RyuApp):
         datapath.send_msg(flow_mod)
 
 
-    def update_sw(self, datapath):
-        """ Helper to get rules and update the rules on the switch """
-        pass
+    def setup_drop_rules(self, datapath: controller.Datapath,
+                         cookie: int=DEFAULT_COOKIE):
+        """ Sets up the drop rules for the datapath. This is set up \
+            individuallyfor both the IN_TABLE and the OUT_TABLE for greater \
+            clarity as to when a packet is dropped
+
+        Args:
+            datapath (controller.Datapath): Datapath that is being configured.
+            cookie (int, optional): The cookie to use for the flow rule. \
+                                    Defaults to DEFAULT_COOKIE.
+        """
+        ofproto_parser: ofproto_v1_3_parser
+        ofproto: ofproto_v1_3
+        ofproto = datapath.ofproto
+        ofproto_parser = datapath.ofproto_parser
+        drop_match = ofproto_parser.OFPMatch()
+        drop_instr = [ofproto_parser.OFPInstructionActions(
+                                            ofproto.OFPIT_APPLY_ACTIONS, [])]
+        self.logger.info(f"Datapath: {datapath.id} adding drop flow rules")
+        self.add_flow(datapath, drop_match, drop_instr, IN_TABLE, cookie, 0)
+        self.add_flow(datapath, drop_match, drop_instr, OUT_TABLE, cookie, 0)
+
+
+    def check_drop_rules_exists(self, datapath: controller.Datapath,
+                                flows: list):
+        drop_flows = [f for f in flows if len(f['instructions']) < 1]
+        if len(drop_flows) < 1:
+            self.logger.debug(f"Datapath: {datapath.id} does not have any drop"
+                               " rules. Setting up drop flow rules")
+            self.setup_drop_rules(datapath)
+            return flows
+        for flow in drop_flows:
+            if flow['table_id'] != OUT_TABLE and flow['table_id'] != IN_TABLE:
+                self.logger.debug(f"Datapath: {datapath.id} has a drop flow "
+                    f"rule not set by Cerberus. This will be removed:\n{flow}")
+                self.remove_flow(datapath, flow['match'], flow['instructions'],
+                                 flow['table_id'])
+                flows.remove(flow)
+            else:
+                flows.remove(flow)
+                self.logger.debug(f"Datapath: {datapath.id} found a matching "
+                                  f"drop flow:\n{flow}")
+        return flows
+
 
 
     def setup_core_in_table(self, datapath, switch):
