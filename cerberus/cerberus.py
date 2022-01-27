@@ -21,7 +21,7 @@ from ryu.base import app_manager
 from ryu.controller import ofp_event, dpset, controller
 from ryu.controller.handler import MAIN_DISPATCHER, set_ev_cls
 from ryu.ofproto import ofproto_v1_3, ofproto_v1_3_parser
-from ryu.lib.packet import vlan, packet, ethernet, ether_types, ipv4, ipv6
+from ryu.lib.packet import vlan, packet, ethernet, ether_types, ipv4, ipv6, arp, icmpv6
 
 # Flow Tables
 IN_TABLE = 0
@@ -55,7 +55,8 @@ class cerberus(app_manager.RyuApp):
     def __init__(self, cookie=DEFAULT_COOKIE, config_file_path=DEFAULT_CONFIG,
                  log_path=DEFAULT_LOG_FILE, rollback_dir=DEFAULT_ROLLBACK_DIR,
                  failed_directory=DEFAULT_FAILED_CONF_DIR,
-                 update_interval=DEFAULT_INTERVAL, *_args, **_kwargs):
+                 update_interval=DEFAULT_INTERVAL, debug_dropped_packets=False,
+                 *_args, **_kwargs):
         super(cerberus, self).__init__(*_args, **_kwargs)
         self.wsgi = _kwargs['wsgi']
         self.wsgi.register(api, {'cerberus_main': self})
@@ -69,11 +70,12 @@ class cerberus(app_manager.RyuApp):
                                         loglevel=logging.DEBUG)
         self.logger.info(f"Starting Cerberus {cerberus.__version__}")
         self.hashed_config = None
-        self.config_file = None
+        self.config_file = {}
         self.config = self.get_config_file()
         self.cookie = cookie
         self.update_interval = update_interval
         self.start_background_thread(self.update_interval)
+        self.debug_dropped_packets = debug_dropped_packets
 
 
     def get_config_file(self, config_file: str = DEFAULT_CONFIG,
@@ -151,7 +153,7 @@ class cerberus(app_manager.RyuApp):
                           be on the switch
         """
         dp_id = datapath.id
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         sw_name = self.config['dp_id_to_sw_name'][dp_id]
         for link in (l for l in self.config['links'] if sw_name in l):
@@ -191,9 +193,9 @@ class cerberus(app_manager.RyuApp):
         Args:
             datapath (controller.Datapath): Datapath to send the request to.
         """
-        ofp_parser: ofproto_v1_3_parser
+        ofp_parser: controller.Datapath.ofproto_parser #type: ignore
         ofp_parser = datapath.ofproto_parser
-        ofp: ofproto_v1_3
+        ofp: ofproto_v1_3 #type: ignore
         ofp = datapath.ofproto
 
         req = ofp_parser.OFPGroupDescStatsRequest(datapath, 0)
@@ -207,7 +209,7 @@ class cerberus(app_manager.RyuApp):
         Args:
             datapath (controller.Datapath): Datapath to send the request to.
         """
-        ofp_parser: ofproto_v1_3_parser
+        ofp_parser: ofproto_v1_3_parser #type: ignore
         ofp_parser = datapath.ofproto_parser
         req = ofp_parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(req)
@@ -416,9 +418,9 @@ class cerberus(app_manager.RyuApp):
                          ports to use to send traffic to the destination datapath.
             group_id (int): Group id of the the destination datapath.
         """
-        ofproto: ofproto_v1_3
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         buckets = self.build_group_buckets(datapath, link)
         msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_ADD,
@@ -438,9 +440,9 @@ class cerberus(app_manager.RyuApp):
             buckets (dict): New bucket config to use.
             group_id (int): Group id that will be updated.
         """
-        ofproto: ofproto_v1_3
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_MODIFY,
                                          ofproto.OFPGT_FF, int(group_id),
@@ -457,9 +459,9 @@ class cerberus(app_manager.RyuApp):
             datapath (controller.Datapath): Datapath to remove groups from.
             group_id (int): The id of the group to remove.
         """
-        ofproto: ofproto_v1_3
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         msg = ofproto_parser.OFPGroupMod(datapath,
                                          command=ofproto.OFPGC_DELETE,
@@ -480,7 +482,7 @@ class cerberus(app_manager.RyuApp):
         Returns:
             list[ofproto_v1_3_parser.OFPBucket]: List of failover buckets.
         """
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         main_port = int(link['main'])
         main_actions = [ofproto_parser.OFPActionOutput(main_port)]
@@ -537,7 +539,7 @@ class cerberus(app_manager.RyuApp):
         """
 
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         match = None
         instructions = []
@@ -571,9 +573,9 @@ class cerberus(app_manager.RyuApp):
                  list[ofproto_v1_3_parser.OFPInstructionActions]]): \
                     Tuple of the match and instructions.
         """
-        ofproto: ofproto_v1_3
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         match = None
         instructions = []
@@ -643,9 +645,9 @@ class cerberus(app_manager.RyuApp):
                  list[ofproto_v1_3_parser.OFPInstructionActions]]): \
                     Tuple of the match and instructions.
         """
-        ofproto: ofproto_v1_3
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         match = None
         actions = []
@@ -677,9 +679,9 @@ class cerberus(app_manager.RyuApp):
                               vid, tagged, port):
         """ Builds the match and instructions for IPv6 flows of hosts that are
             are directly connected """
-        ofproto: ofproto_v1_3
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         match = None
         actions = []
@@ -711,9 +713,9 @@ class cerberus(app_manager.RyuApp):
                                     vid, group_id):
         """ Builds the flow and instructions for mac flows of hosts
             inderectly connected """
-        ofproto: ofproto_v1_3
+        ofproto:  ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         match = None
         instructions = []
@@ -738,9 +740,9 @@ class cerberus(app_manager.RyuApp):
 
     def build_indirect_ipv4_out(self, datapath: controller.Datapath, mac, ipv4,
                                 vid, group_id):
-        ofproto: ofproto_v1_3
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         match = None
         instructions = []
@@ -769,9 +771,9 @@ class cerberus(app_manager.RyuApp):
                                 vid, group_id):
         """ Builds the match and instructions for IPv6 flows of hosts that are
             are directly connected """
-        ofproto: ofproto_v1_3
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
         ofproto_parser = datapath.ofproto_parser
         match = None
         instructions = []
@@ -808,7 +810,7 @@ class cerberus(app_manager.RyuApp):
     def add_flow(self, datapath: controller.Datapath, match, actions, table,
                  cookie=DEFAULT_COOKIE, priority=DEFAULT_PRIORITY):
         """ Helper to a flow to the switch """
-        parser: ofproto_v1_3_parser
+        parser:  #type: ignore
         parser = datapath.ofproto_parser
         flow_mod = parser.OFPFlowMod(datapath=datapath, match=match,
                                      instructions=actions, table_id=table,
@@ -821,9 +823,9 @@ class cerberus(app_manager.RyuApp):
 
     def remove_flow(self, datapath, match, instructions, table_id):
         """ Helper to remove a particular rule from the datapath """
-        ofproto: ofproto_v1_3
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser#type: ignore
         ofproto_parser = datapath.ofproto_parser
 
         flow_mod = ofproto_parser.OFPFlowMod(datapath=datapath,
@@ -839,9 +841,9 @@ class cerberus(app_manager.RyuApp):
 
     def update_flow(self, datapath, match, instructions, table_id):
         """ Helper to update a rule on the datapath """
-        ofproto: ofproto_v1_3
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
-        ofproto_parser: ofproto_v1_3_parser
+        ofproto_parser: ofproto_v1_3_parser#type: ignore
         ofproto_parser = datapath.ofproto_parser
 
         flow_mod = ofproto_parser.OFPFlowMod(datapath=datapath,
@@ -866,8 +868,8 @@ class cerberus(app_manager.RyuApp):
             cookie (int, optional): The cookie to use for the flow rule. \
                                     Defaults to DEFAULT_COOKIE.
         """
-        ofproto_parser: ofproto_v1_3_parser
-        ofproto: ofproto_v1_3
+        ofproto_parser: ofproto_v1_3_parser #type: ignore
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
         ofproto_parser = datapath.ofproto_parser
         if self.logger.isEnabledFor(logging.DEBUG):
@@ -883,8 +885,6 @@ class cerberus(app_manager.RyuApp):
 
     def check_drop_rules_exists(self, datapath: controller.Datapath,
                                 flows: list):
-        ofproto: ofproto_v1_3
-        ofproto = datapath.ofproto
         drop_flows = [f for f in flows if len(f['instructions']) < 1]
         if self.logger.isEnabledFor(logging.DEBUG):
             flows = self.check_controller_in_rule_exists(datapath, flows)
@@ -1281,6 +1281,10 @@ class cerberus(app_manager.RyuApp):
                     if 'backup' not in link:
                         link = config_parser.find_link_backup_group(dp_name,
                                                     link, links, group_links)
+                    if not link:
+                        self.logger.debug(f'Datapath: {datapath.id} could not '
+                                        f'find a backup path to {target_dp_id}')
+                        continue
                     buckets = self.build_group_buckets(datapath, link)
                     groups = self.assess_groups(datapath, groups, target_dp_id,
                                                 buckets, link)
@@ -1291,6 +1295,10 @@ class cerberus(app_manager.RyuApp):
                         sw_link = config_parser.find_indirect_group(dp_name,
                                                 route, links, group_links,
                                                 target_dp_id, switches)
+                        if not sw_link:
+                            self.logger.debug(f'Datapath: {datapath.id} could not '
+                                        f'find a backup path to {target_dp_id}')
+                            continue
                         buckets = self.build_group_buckets(datapath, sw_link)
                         groups = self.assess_groups(datapath, groups,
                                     target_dp_id, buckets, sw_link)
@@ -1821,8 +1829,8 @@ class cerberus(app_manager.RyuApp):
 
     def debug_setup_table_miss(self, datapath: controller.Datapath,
                               cookie: int=DEFAULT_COOKIE):
-        parser: ofproto_v1_3_parser
-        ofproto: ofproto_v1_3
+        parser: ofproto_v1_3_parser #type: ignore
+        ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         self.logger.debug(f"Datapath: {datapath.id} setting up table miss rules to"
@@ -1838,32 +1846,89 @@ class cerberus(app_manager.RyuApp):
         self.add_flow(datapath, match, instr, OUT_TABLE, cookie, priority=1000)
 
 
-    @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
-    def debug_flow_in_handler(self, ev: ofp_event):
+    @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER) #type: ignore
+    def debug_flow_in_handler(self, ev):
 
         datapath: controller.Datapath
-        parser: ofproto_v1_3_parser
-        ofproto: ofproto_v1_3
         matched: ofproto_v1_3_parser.OFPMatch
         pkt: packet.Packet
 
         # pdb.set_trace()
         msg         = ev.msg
         datapath    = msg.datapath
-        ofproto     = datapath.ofproto
-        parser      = datapath.ofproto_parser
         matched     = msg.match
         in_port     = matched['in_port']
         table_id    = msg.table_id
         pkt         = packet.Packet(msg.data)
-        vid         = pkt.get_protocols(vlan.vlan)
+        vlans       = pkt.get_protocols(vlan.vlan)
         eth         = pkt.get_protocols(ethernet.ethernet)[0]
         proto       = pkt.protocols
-        ipv4_addr   = pkt.get_protocols(ipv4.ipv4)
-        ipv6_addr   = pkt.get_protocols(ipv6.ipv6)
+        arp_rules   = pkt.get_protocols(arp.arp)
+        ipv4_rules  = pkt.get_protocols(ipv4.ipv4)
+        ipv6_rules  = pkt.get_protocols(ipv6.ipv6)
+        icmpv6_rules= pkt.get_protocols(icmpv6.icmpv6)
 
-        self.logger.debug(f"Datapath: {datapath.id} has a packet that should "
-            f"dropped. It contains the following fields: \n"
-            f"In port: {in_port}\t table_id: {table_id}\tvlan_id:\t{vid}\n"
-            f"Ethernet: {eth}\nProtocols: {proto}\n"
-            f"ipv4: {ipv4_addr}\nipv6 {ipv6_addr}\n")
+        ipv4_dict   = {}
+        arp_dict    = {}
+        ipv6_dict   = {}
+        if len(arp_rules) > 0:
+            arp_dict = { 'src_mac': arp_rules[0].src_mac,
+                         'src_ip' : arp_rules[0].src_ip,
+                         'dst_mac': arp_rules[0].dst_mac,
+                         'dst_ip' : arp_rules[0].dst_ip}
+        if len(ipv4_rules) > 0:
+            ipv4_dict = { 'src'   : ipv4_rules[0].src,
+                          'dst'   : ipv4_rules[0].dst,
+                          'proto' : ipv4_rules[0].proto}
+        if len(ipv6_rules) > 0:
+            ipv6_dict = { 'src' : ipv6_rules[0].src,
+                          'dst' : ipv6_rules[0].dst}
+            if len(icmpv6_rules) > 0:
+                ipv6_dict['icmpv6'] = [p.to_jsondict() for p in icmpv6_rules]
+
+        # ipv4_dict = {'ipv4' :}
+        now = datetime.now()
+        datefmt = "%Y-%m-%dT%H:%M:%S"
+
+        packet_dict = { 'time'      : now.strftime(datefmt),
+                        'dp_id'     : datapath.id,
+                        'in_port'   : in_port,
+                        'table_id'  : table_id,
+                        'eth_src'   : eth.src,
+                        'eth_dst'   : eth.dst,
+                        'eth_type'  : eth.ethertype,
+                        'vlans'     : [v.to_jsondict() for v in vlans],
+                        'ipv4'      : ipv4_dict,
+                        'arp'       : arp_dict,
+                        'ipv6'      : ipv6_dict,
+                        'all_proto' : [p.to_jsondict() for p in proto]}
+
+        self.debug_write_packet_to_log(packet_dict)
+
+
+    def debug_write_packet_to_log(self, packet_dict: dict,
+                    filename: str = DEFAULT_LOG_PATH+"/packets_dropped.json"):
+        """
+        Writes any packets that have been dropped to a packet drop log.
+        This is primarily for used for debugging, and very experimental.
+
+        WARNING: The file generated will not be a valid JSON file, as it \
+            merely appends the packet dictionary as a json string at \
+            the bottom of the log.
+
+        This can/should be modified in the future to work with a JSON based \
+            database, but as it is primarily used for debugging, \
+            this is not a priority
+
+        Args:
+            packet_dict (dict): Missed packet to write to log
+            filename (str, optional): File path to write packet to. \
+            Defaults to /var/log/cerberus/packets_dropped.json".
+        """
+
+
+        with open(filename, 'a+') as file:
+            file.write(json.dumps(packet_dict)+",\n\n")
+
+        self.logger.debug(f"Datapath: {packet_dict['dp_id']} wrote a dropped "
+                          f"packet to {filename}")
