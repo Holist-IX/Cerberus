@@ -67,7 +67,7 @@ class cerberus(app_manager.RyuApp):
         self.failed_directory = failed_directory
         self.log_path = log_path
         self.logger = self.setup_logger(logfile=self.log_path,
-                                        loglevel=logging.DEBUG)
+                                        loglevel=logging.INFO)
         self.logger.info(f"Starting Cerberus {cerberus.__version__}")
         self.hashed_config = None
         self.config_file = {}
@@ -162,8 +162,8 @@ class cerberus(app_manager.RyuApp):
                                                 datapath.ofproto_parser, flows)
             if not flow_exists:
                 self.add_in_flow(core_port, datapath)
-                # self.logger.debug(f"Core port {core_port} was not found on "
-                #                   f"switch {sw_name}")
+                self.logger.debug(f"Core port {core_port} was not found on "
+                                  f"switch {sw_name}")
                 # Send a group stat request to ensure that groups are in sync
                 self.send_group_desc_stats_request(datapath)
 
@@ -231,7 +231,7 @@ class cerberus(app_manager.RyuApp):
             flow = {"table_id": stat.table_id, "match": stat.match,
                     "instructions": stat.instructions, "cookie": stat.cookie}
             flows.append(flow)
-        # self.logger.debug(f"Datapath: {dp_id}\t FlowStats: {flows}")
+        self.logger.debug(f"Datapath: {dp_id}\t FlowStats: {flows}")
         if len([f for f in flows if f['cookie'] == self.cookie]) < 1:
             self.logger.info(f"Datapath: {dp_id} will be configured")
             self.clear_flows(dp)
@@ -256,7 +256,7 @@ class cerberus(app_manager.RyuApp):
         stat: ofproto_v1_3_parser.OFPGroupDescStats
         for stat in ev.msg.body:
             groups.append({"group_id": stat.group_id, "buckets": stat.buckets})
-        # self.logger.debug(f"Datapath: {dp_id} Groups: {groups}")
+        self.logger.debug(f"Datapath: {dp_id} Groups: {groups}")
 
         if len(groups) < 1:
             self.setup_groups(dp)
@@ -329,10 +329,10 @@ class cerberus(app_manager.RyuApp):
                     ipv6 = host['ipv6'] if 'ipv6' in host else ""
                     self.logger.info(f"Datapath: {dp_id}\tConfiguring host: "
                                      f"{host_name} on port: {port}")
-                    # self.logger.debug(f"Datapath: {dp_id}\t host: {host_name} "
-                    #                   f"has mac: {mac}\tvlan: {vlan_id}\t"
-                    #                   f"tagged: {tagged}\tipv4: {ipv4}\t"
-                    #                   f"ipv6: {ipv6}")
+                    self.logger.debug(f"Datapath: {dp_id}\t host: {host_name} "
+                                      f"has mac: {mac}\tvlan: {vlan_id}\t"
+                                      f"tagged: {tagged}\tipv4: {ipv4}\t"
+                                      f"ipv6: {ipv6}")
                     self.add_in_flow(port, datapath, mac, vlan_id, tagged)
                     self.setup_flows_for_direct_connect(datapath, int(port),
                                                         host_name, mac, vlan_id,
@@ -426,8 +426,8 @@ class cerberus(app_manager.RyuApp):
         msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_ADD,
                                          ofproto.OFPGT_FF, int(group_id),
                                          buckets)
-        # self.logger.debug(f"Datapath: {datapath.id} is adding group {group_id}"
-        #                   f" with the following buckets:\n{buckets}")
+        self.logger.debug(f"Datapath: {datapath.id} is adding group {group_id}"
+                          f" with the following buckets:\n{buckets}")
         datapath.send_msg(msg)
 
 
@@ -447,8 +447,8 @@ class cerberus(app_manager.RyuApp):
         msg = ofproto_parser.OFPGroupMod(datapath, ofproto.OFPGC_MODIFY,
                                          ofproto.OFPGT_FF, int(group_id),
                                          buckets)
-        # self.logger.debug(f"Datapath: {datapath.id} is updating group "
-        #                   f"{group_id} with the following buckets:\n{buckets}")
+        self.logger.debug(f"Datapath: {datapath.id} is updating group "
+                          f"{group_id} with the following buckets:\n{buckets}")
         datapath.send_msg(msg)
 
 
@@ -466,8 +466,8 @@ class cerberus(app_manager.RyuApp):
         msg = ofproto_parser.OFPGroupMod(datapath,
                                          command=ofproto.OFPGC_DELETE,
                                          group_id=group_id)
-        # self.logger.debug(f"Datapath: {datapath.id} is deleting "
-        #                   f"group {group_id}")
+        self.logger.debug(f"Datapath: {datapath.id} is deleting "
+                          f"group {group_id}")
         datapath.send_msg(msg)
 
 
@@ -815,9 +815,9 @@ class cerberus(app_manager.RyuApp):
         flow_mod = parser.OFPFlowMod(datapath=datapath, match=match,
                                      instructions=actions, table_id=table,
                                      priority=priority, cookie=cookie)
-        # self.logger.debug(f"Datapath: {datapath.id} is adding flow to "
-        #                   f"table: {table} with the following\n"
-        #                   f"Match: {match}\nActions: {actions}")
+        self.logger.debug(f"Datapath: {datapath.id} is adding flow to "
+                          f"table: {table} with the following\n"
+                          f"Match: {match}\nActions: {actions}")
         datapath.send_msg(flow_mod)
 
 
@@ -833,9 +833,9 @@ class cerberus(app_manager.RyuApp):
                                              table_id=table_id,
                                              match=match,
                                              instructions=instructions)
-        # self.logger.debug(f"Datapath: {datapath.id} is removing flow from "
-        #             f"table: {table_id} matching the following\n"
-        #             f"Match: {match}\nActions: {instructions}")
+        self.logger.debug(f"Datapath: {datapath.id} is removing flow from "
+                    f"table: {table_id} matching the following\n"
+                    f"Match: {match}\nActions: {instructions}")
         datapath.send_msg(flow_mod)
 
 
@@ -851,9 +851,9 @@ class cerberus(app_manager.RyuApp):
                                              table_id=table_id,
                                              match=match,
                                              instructions=instructions)
-        # self.logger.debug(f"Datapath: {datapath.id} is updating flow from "
-        #             f"table: {table_id} matching the following\n"
-        #             f"Match: {match}\nActions: {instructions}")
+        self.logger.debug(f"Datapath: {datapath.id} is updating flow from "
+                          f"table: {table_id} matching the following\n"
+                          f"Match: {match}\nActions: {instructions}")
         datapath.send_msg(flow_mod)
 
 
@@ -872,7 +872,7 @@ class cerberus(app_manager.RyuApp):
         ofproto: ofproto_v1_3 #type: ignore
         ofproto = datapath.ofproto
         ofproto_parser = datapath.ofproto_parser
-        if self.logger.isEnabledFor(logging.DEBUG):
+        if self.debug_dropped_packets:
             self.debug_setup_table_miss(datapath, cookie)
 
         drop_match = ofproto_parser.OFPMatch()
@@ -886,7 +886,7 @@ class cerberus(app_manager.RyuApp):
     def check_drop_rules_exists(self, datapath: controller.Datapath,
                                 flows: list):
         drop_flows = [f for f in flows if len(f['instructions']) < 1]
-        if self.logger.isEnabledFor(logging.DEBUG):
+        if self.debug_dropped_packets:
             flows = self.check_controller_in_rule_exists(datapath, flows)
 
         if len(drop_flows) < 1:
@@ -953,11 +953,11 @@ class cerberus(app_manager.RyuApp):
         """ Resets the flows on the datapath """
         ofproto = datapath.ofproto
         ofproto_parser = datapath.ofproto_parser
-        flow_mod = ofproto_parser.OFPFlowMod(datapath=datapath,
-                                             command=ofproto.OFPFC_DELETE,
-                                             table_id=ofproto.OFPTT_ALL,
-                                             out_port=ofproto.OFPP_ANY,
-                                             out_group=ofproto.OFPG_ANY
+        flow_mod = ofproto_parser.OFPFlowMod(datapath  =datapath,
+                                             command   =ofproto.OFPFC_DELETE,
+                                             table_id  =ofproto.OFPTT_ALL,
+                                             out_port  =ofproto.OFPP_ANY,
+                                             out_group =ofproto.OFPG_ANY
                                              )
         self.logger.debug(f"Datapath: {datapath.id} is clearing all flows")
         datapath.send_msg(flow_mod)
@@ -1002,7 +1002,7 @@ class cerberus(app_manager.RyuApp):
     def store_config(self, config, config_file_path: str):
         try:
             with open(config_file_path, 'w') as json_file:
-                # self.logger.debug('Writing new config to be used as main config')
+                self.logger.debug('Writing new config to be used as main config')
                 json.dump(config, json_file, indent=2)
         except FileNotFoundError:
             self.logger.error(f"The file at {config_file_path} does not exist")
@@ -1030,18 +1030,21 @@ class cerberus(app_manager.RyuApp):
         rollback_fname = f"{rollback_directory}/{running_conf_fname}"
         try:
             file_list = os.listdir(rollback_directory)
-            # self.logger.debug(f'There are {len(file_list)} files in the rollback directory')
+            self.logger.debug(f'There are {len(file_list)} files in '
+                              'the rollback directory')
             if len(file_list) > 0:
                 rollback_files = [f for f in file_list if f.endswith('.rollback')]
                 running_files = [f for f in file_list if f.endswith('.running')]
 
                 if len(rollback_files) > 0:
-                    # self.logger.debug(f"There are {len(rollback_files)} rollback files in the rollback directory")
+                    self.logger.debug(f"There are {len(rollback_files)} "
+                                    "rollback files in the rollback directory")
                     for rollback_file in rollback_files:
                         self.move_rollback_conf_to_backups(
                             f"{rollback_directory}/{rollback_file}")
                 if len(running_files) > 0:
-                    # self.logger.debug(f"There are {len(running_files)} running files in the rollback directory")
+                    self.logger.debug(f"There are {len(running_files)} "
+                                    "running files in the rollback directory")
                     for running_file in running_files:
                         self.move_running_conf_to_rollback(
                             f"{rollback_directory}/{running_file}")
@@ -1106,12 +1109,14 @@ class cerberus(app_manager.RyuApp):
     def write_failed_config_to_failed_dir(self, config: dict,
                                           failed_conf_directory: str):
         try:
-            filename = f"{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}.failed_config"
+            formated_date = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+            filename = f"{formated_date}.failed_config"
             filepath = f"{failed_conf_directory}/{filename}"
             with open(filepath, 'w+') as file:
                 json.dump(config, file, indent=2)
         except Exception as err:
-            self.logger.error("Error in writing failed API config to failed directory")
+            self.logger.error("Error in writing failed API config to "
+                              "failed directory")
             pass
 
 
@@ -1184,7 +1189,7 @@ class cerberus(app_manager.RyuApp):
                                  if f.endswith(".rollback")][0]
                 return self.open_config_file(
                                     f"{rollback_directory}/{rollback_file}")
-            # Looks even further back to see if there are any previous files at all
+            # Looks further back to see if there are any previous files at all
             # Here be dragons
             if len([f for f in os.listdir(rollback_directory)
                     if f.endswith(".json")]) > 0:
@@ -1369,17 +1374,17 @@ class cerberus(app_manager.RyuApp):
         """ Helper function to see if a host exists on the switch """
         host_name = host['name']
         mac = host['mac']
-        vlan_id = host['vlan'] if 'vlan' in host else 0
-        tagged = host['tagged'] if 'tagged' in host else False
-        ipv4 = host['ipv4'] if 'ipv4' in host else ""
-        ipv6 = host['ipv6'] if 'ipv6' in host else ""
+        vlan_id = host['vlan']     if 'vlan'   in host else 0
+        tagged  = host['tagged']   if 'tagged' in host else False
+        ipv4    = host['ipv4']     if 'ipv4'   in host else ""
+        ipv6    = host['ipv6']     if 'ipv6'   in host else ""
 
         mac_result, flows = self.check_mac_flow_exist(datapath,
                                         mac, vlan_id, tagged, port,
                                         flows, group_id)
         if mac_result == FLOW_NOT_FOUND or mac_result == FLOW_OLD_DELETE:
-            # self.logger.debug(f"Datapath: {datapath.id} did not find {mac} "
-            #                    "and is going to add a new rule")
+            self.logger.debug(f"Datapath: {datapath.id} did not find {mac} "
+                               "and is going to add a new rule")
             if group_id:
                 self.add_indirect_mac_flow(datapath, host_name, mac,
                                            vlan_id, group_id)
@@ -1393,9 +1398,9 @@ class cerberus(app_manager.RyuApp):
                                                 mac, ipv4, vlan_id, tagged,
                                                 port, flows, group_id)
             if v4_result == FLOW_NOT_FOUND or v4_result == FLOW_OLD_DELETE:
-                # self.logger.debug(f"Datapath: {datapath.id} did not find {ipv4} "
-                #                   "already on the datapath and is going to "
-                #                   "add a new flow")
+                self.logger.debug(f"Datapath: {datapath.id} did not find {ipv4} "
+                                  "already on the datapath and is going to "
+                                  "add a new flow")
                 if group_id:
                     self.add_indirect_ipv4_flow(datapath, host_name, mac, ipv4,
                                                 vlan_id, group_id)
@@ -1403,9 +1408,9 @@ class cerberus(app_manager.RyuApp):
                     self.add_direct_ipv4_flow(datapath, host_name, mac, ipv4,
                                               vlan_id, tagged, port)
             if v4_result == FLOW_TO_UPDATE:
-                # self.logger.debug(f"Datapath: {datapath.id} found {ipv4} "
-                #                   " on the datapath but it is out of sync,"
-                #                   "so it will be updated")
+                self.logger.debug(f"Datapath: {datapath.id} found {ipv4} "
+                                  " on the datapath but it is out of sync,"
+                                  "so it will be updated")
                 if group_id:
                     match, inst = self.build_indirect_ipv4_out(datapath, mac,
                                                         ipv4, vlan_id, group_id)
@@ -1417,9 +1422,9 @@ class cerberus(app_manager.RyuApp):
             v6_result, flows = self.check_ipv6_flow_exist(datapath, mac, ipv6,
                                         vlan_id, tagged, port, flows, group_id)
             if v6_result == FLOW_NOT_FOUND or v6_result == FLOW_OLD_DELETE:
-                # self.logger.debug(f"Datapath: {datapath.id} did not find {ipv6}"
-                #                   " already on the datapath and is going to "
-                #                   "add a new flow")
+                self.logger.debug(f"Datapath: {datapath.id} did not find {ipv6}"
+                                  " already on the datapath and is going to "
+                                  "add a new flow")
                 if group_id:
                     self.add_indirect_ipv6_flow(datapath, host_name, mac, ipv6,
                                                 vlan_id, group_id)
@@ -1427,9 +1432,9 @@ class cerberus(app_manager.RyuApp):
                     self.add_direct_ipv6_flow(datapath, host_name, mac, ipv6,
                                               vlan_id, tagged, port)
             if v6_result == FLOW_TO_UPDATE:
-                # self.logger.debug(f"Datapath: {datapath.id} found {ipv6} "
-                #                   " on the datapath but it is out of sync,"
-                #                   "so it will be updated")
+                self.logger.debug(f"Datapath: {datapath.id} found {ipv6} "
+                                  " on the datapath but it is out of sync,"
+                                  "so it will be updated")
                 if group_id:
                     match, inst = self.build_indirect_ipv6_out(datapath, mac,
                                                         ipv6, vlan_id, group_id)
@@ -1497,7 +1502,7 @@ class cerberus(app_manager.RyuApp):
                                  flows, group_id=None):
         """ Checks to see if the mac address exists in the flow table """
         exists = FLOW_NOT_FOUND
-        in_flows = [f for f in flows if f['table_id'] == IN_TABLE]
+        in_flows  = [f for f in flows if f['table_id'] == IN_TABLE]
         out_flows = [f for f in flows if f['table_id'] == OUT_TABLE]
         if not group_id:
             in_match, in_inst = self.build_direct_mac_flow_in(datapath, mac,
@@ -1713,8 +1718,7 @@ class cerberus(app_manager.RyuApp):
         for switch in self.config['switches']:
             dpid = self.config['switches'][switch]['dp_id']
             dp = self.dpset.get(dpid)
-            # Need to send flow stats request which will trigger a flow
-            # table update
+            # Need to send flow stats request to trigger a table update
             if dp:
                 self.send_flow_stats_request(dp)
                 self.send_group_desc_stats_request(dp)
@@ -1853,7 +1857,6 @@ class cerberus(app_manager.RyuApp):
         matched: ofproto_v1_3_parser.OFPMatch
         pkt: packet.Packet
 
-        # pdb.set_trace()
         msg         = ev.msg
         datapath    = msg.datapath
         matched     = msg.match
@@ -1886,7 +1889,6 @@ class cerberus(app_manager.RyuApp):
             if len(icmpv6_rules) > 0:
                 ipv6_dict['icmpv6'] = [p.to_jsondict() for p in icmpv6_rules]
 
-        # ipv4_dict = {'ipv4' :}
         now = datetime.now()
         datefmt = "%Y-%m-%dT%H:%M:%S"
 
