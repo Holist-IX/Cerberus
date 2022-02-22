@@ -1,18 +1,24 @@
 # Cerberus
 
-Cerberus is an OpenFlow controller for OpenFlow 1.3 switches, focusing on
+Cerberus is an OpenFlow controller for OpenFlow 1.3 switches, that focuses on
 layer-2 switching. Cerberus takes a proactive approach to network configuration
-and only allows connections to hosts that are already configured. By taking a
-proactive approach to network configuration, Cerberus takes multicast traffic
-and translates it to unicast. This eliminates MAC learning happening on the
-switches themselves. Cerberus is build on top of the
+and only allows connections to hosts that are already configured. Any
+broadcast(ARP request) and multicast(ICPM6-ND) traffic gets changed into unicast
+traffic upon entering the network. This eliminates MAC learning from taking
+place on the switches themselves. Cerberus is build on top of the
 [Ryu OpenFlow Controller](https://ryu.readthedocs.io/en/latest/index.html).
 
-The primary design principles oof Cerberus is to reduce as much complexity
-within a network, and to have as little impact as possible on a running network.
-This means that a switch is largely configured as a "set and forget". Cerberus
-will periodically check in if the switch state matches the expected state, but
-there is no network learning happening from the switches.
+The fundamental design principles of Cerberus are to:
+
+* Reduce as much complexity within a network
+* Minimise the impact on the running network.
+
+A proactive design allows the network to operate without persistent connection
+with Cerberus. This allows Cerberus to essentially “set and forget” the
+configs on the switches. However, Cerberus will still regularly check to ensure
+the dataplane state is correct, and update it appropriately. A proactive
+approach to network configuration means traffic within the network is known,
+and we drop any unknown traffic at the edge.
 
 ## Features
 
