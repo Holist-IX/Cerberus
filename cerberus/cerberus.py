@@ -1904,8 +1904,6 @@ class cerberus(app_manager.RyuApp):
             filename (str, optional): File path to write packet to. \
             Defaults to /var/log/cerberus/packets_dropped.json".
         """
-
-
         with open(filename, 'a+') as file:
             file.write(json.dumps(packet_dict)+",\n\n")
 
