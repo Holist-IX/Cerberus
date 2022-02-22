@@ -176,8 +176,8 @@ class cerberus(app_manager.RyuApp):
         flows = self.check_drop_rules_exists(datapath, flows)
 
         if len(flows) > 0:
-            self.logger.info(f"There are still some flows left on the "
-                             f"switch {sw_name}\nFlows:{flows}")
+            self.logger.debug(f"There are still some flows left on the "
+                              f"switch {sw_name}\nFlows:{flows}")
             self.logger.debug("Unrecognised flows will be removed")
             for flow in flows:
                 self.remove_flow(datapath, flow['match'], flow['instructions'],
@@ -266,18 +266,32 @@ class cerberus(app_manager.RyuApp):
         Args:
           ev: The event object.
         """
-        dp = ev.msg.datapath
-        dp_id = dp.id
+        dp = ev.datapath
+        ofproto: ofproto_v1_3 #type: ignore
+        ofproto = dp.ofproto
         reason = ""
+        port_no = ev.port_no
         if ev.reason == dp.ofproto.OFPPR_ADD:
-            reason = "added"
+            reason = "been added"
         elif ev.reason == dp.ofproto.OFPPR_DELETE:
-            reason = "deleted"
+            reason = "been deleted"
         elif ev.reason == dp.ofproto.OFPPR_MODIFY:
-            reason = "modified"
+            # import pdb
+            # pdb.set_trace()
+            port = dp.ports[port_no]
+            if port.state == ofproto.OFPPS_LINK_DOWN:
+                reason = "gone down"
+            elif port.state == ofproto.OFPPS_LIVE:
+                reason = "gone up"
+            elif port.state == ofproto.OFPPS_BLOCKED:
+                reason = "been blocked"
+            else:
+                reason = "been modified but state does not match ofproto port states"
+
         else:
-            reason = f"unknown, please check ev.reason dumped here: {ev.reason}"
-        self.logger.info(f"Datapath: {dp_id} the port port {ev.port_no} was "
+            reason = (f"triggered a port state change but it was unknown, "
+                      f"please check ev.reason dumped here: {ev.reason}")
+        self.logger.info(f"Datapath: {dp.id} the port port {port_no} has "
                          f"{reason}")
 
 
@@ -1627,14 +1641,43 @@ class cerberus(app_manager.RyuApp):
         json_string = {"resp": "hello_world"}
         return json_string
 
+
     def get_switches(self):
         return self.config['switches']
+
 
     def get_running_config(self):
         return self.config
 
+
     def get_running_config_file(self):
         return self.config_file
+
+
+    def set_debug_packet_flow_state(self, req_dict: dict) -> dict:
+        """
+        This function is used to enable or disable debugging flow states by
+        capturing dropped packets
+
+        Args:
+          request (str): json string to enable debugging the flow. Expects a \
+            `enable` variable to determine whether the debug flows should be added
+        """
+        msg = {'status': ""}
+        if 'enable' not in req_dict:
+            msg['status'] = "Error!"
+            msg['msg'] = "No `enable` field was detected in the request"
+            return msg
+        if type(req_dict['enable']) != bool:
+            msg['status'] = "Error! There was no `enable` field in the request"
+            msg['msg'] = "The `enable` variable must be set to either true or false"
+            return msg
+        enabled = 'enabled' if req_dict['enable'] else 'disabled'
+        self.logger.info(f"Debbuging packet flows have been {enabled} via "
+                         f"the API calls")
+        self.debug_dropped_packets = req_dict['enable']
+        return msg
+        # self.debug_dropped_packets = enable
 
 
     def push_new_config(self, raw_config):
