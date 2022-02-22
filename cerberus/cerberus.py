@@ -52,7 +52,7 @@ class cerberus(app_manager.RyuApp):
     def __init__(self, cookie=DEFAULT_COOKIE, config_file_path=DEFAULT_CONFIG,
                  log_path=DEFAULT_LOG_FILE, rollback_dir=DEFAULT_ROLLBACK_DIR,
                  failed_directory=DEFAULT_FAILED_CONF_DIR,
-                 update_interval=DEFAULT_INTERVAL, debug_dropped_packets=True,
+                 update_interval=DEFAULT_INTERVAL, debug_dropped_packets=False,
                  *_args, **_kwargs):
         super(cerberus, self).__init__(*_args, **_kwargs)
         self.wsgi = _kwargs['wsgi']
@@ -257,6 +257,28 @@ class cerberus(app_manager.RyuApp):
             self.setup_groups(dp)
         else:
             self.compare_and_update_groups(dp, groups)
+
+    @set_ev_cls(ofp_event.EventOFPPortStateChange, MAIN_DISPATCHER)#type: ignore
+    def port_state_change_handler(self, ev):
+        """
+        Handler to log when a port state change is detected on a datapath.
+
+        Args:
+          ev: The event object.
+        """
+        dp = ev.msg.datapath
+        dp_id = dp.id
+        reason = ""
+        if ev.reason == dp.ofproto.OFPPR_ADD:
+            reason = "added"
+        elif ev.reason == dp.ofproto.OFPPR_DELETE:
+            reason = "deleted"
+        elif ev.reason == dp.ofproto.OFPPR_MODIFY:
+            reason = "modified"
+        else:
+            reason = f"unknown, please check ev.reason dumped here: {ev.reason}"
+        self.logger.info(f"Datapath: {dp_id} the port port {ev.port_no} was "
+                         f"{reason}")
 
 
     def start_background_thread(self, interval: int):
