@@ -1,12 +1,10 @@
 import traceback
-import json
 
 from simplejson import JSONDecodeError
 
 from cerberus.exceptions import *
 from ryu.app.wsgi import ControllerBase, route
 from webob import Response, Request
-import pdb
 
 class api(ControllerBase):
     """ API front end for Cerberus.

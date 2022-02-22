@@ -276,8 +276,6 @@ class cerberus(app_manager.RyuApp):
         elif ev.reason == dp.ofproto.OFPPR_DELETE:
             reason = "been deleted"
         elif ev.reason == dp.ofproto.OFPPR_MODIFY:
-            # import pdb
-            # pdb.set_trace()
             port = dp.ports[port_no]
             if port.state == ofproto.OFPPS_LINK_DOWN:
                 reason = "gone down"
