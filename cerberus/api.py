@@ -1,5 +1,6 @@
 import traceback
-import json
+
+from simplejson import JSONDecodeError
 
 from cerberus.exceptions import *
 from ryu.app.wsgi import ControllerBase, route
@@ -116,5 +117,24 @@ class api(ControllerBase):
         try:
             return Response(content_type='application/json',
                             json=self.app.api_rollback_to_last_config())
+        except:
+            return Response(status=500, json={"error": traceback.format_exc()})
+
+
+    @route("cerberus", "/api/set_debug_flow_state", methods=['PUT'])
+    def set_debug_packet_flow_state(self, req: Request, **kwargs) -> Response:
+
+        self.app.logger.info(f"Request to set debug packet flow was called"
+                             f" by:\t{req.host}")
+
+        try:
+            return Response(content_type='application/json',
+                            json=self.app.set_debug_packet_flow_state(req.json))
+        except JSONDecodeError:
+            self.app.logger.info(f"Failed to set debug packet flow from "
+                                 f"{req.host} due to a JSONDecodeError. "
+                                 f"The request sent was {req.text}")
+            return Response(status=500, json={
+                "error": "Ensure that request is in a json format"})
         except:
             return Response(status=500, json={"error": traceback.format_exc()})

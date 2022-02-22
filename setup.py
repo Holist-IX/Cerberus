@@ -18,8 +18,8 @@ def setup_configs():
     rollback_dir = '/etc/cerberus/rollback'
     failed_dir = '/etc/cerberus/failed'
     umbrella_json = os.path.join(conf_dir, 'umbrella.json')
-    defualt_umbrella = resource_filename(__name__, 'etc/cerberus/umbrella.json')
-    default_conf = resource_filename(__name__, 'etc/cerberus/topology.json')
+    defualt_umbrella = resource_filename(__name__, '/etc/cerberus/umbrella.json')
+    default_conf = resource_filename(__name__, '/etc/cerberus/topology.json')
 
     try:
         if not os.path.exists(log_dir):

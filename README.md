@@ -4,7 +4,7 @@ Cerberus is an OpenFlow controller for OpenFlow 1.3 switches, focusing on
 layer-2 switching. Cerberus takes a proactive approach to network configuration
 and only allows connections to hosts that are already configured. By taking a
 proactive approach to network configuration, Cerberus takes multicast traffic
-and translates it to unicast. This eliminates MAC leanring happening on the
+and translates it to unicast. This eliminates MAC learning happening on the
 switches themselves. Cerberus is build on top of the
 [Ryu OpenFlow Controller](https://ryu.readthedocs.io/en/latest/index.html).
 
@@ -18,7 +18,7 @@ there is no network learning happening from the switches.
 
 * OpenFlow 1.3 support
 * Translate Multicast to Unicast traffic
-* Elimates unwanted traffic within network
+* Eliminates unwanted traffic within network
 * VLAN, both tagged and untagged ports
 * IPv4 and IPv6
 * Redundancy setup for switches with multiple paths
@@ -90,6 +90,6 @@ Below is a sample of the topology config:
 ```
 ## Support
 
-You can contact us via twiiter [@IxHolist](https://twitter.com/IxHolist).
+You can contact us via Twitter [@IxHolist](https://twitter.com/IxHolist).
 If you encounter any bugs please open an issue. For more information go to our
 [site](https://holistix.iijlab.net/)
