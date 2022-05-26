@@ -87,7 +87,7 @@ class cerberus(app_manager.RyuApp):
             rollback_directory (str, optional): Location where the rollback
                                                 files are stored.
                                                 Defaults to DEFAULT_ROLLBACK_DIR.
-            failed_directory (str, optional): Loaction where the
+            failed_directory (str, optional): Location where the
                                               failed configurations are stored.
                                               Defaults to DEFAULT_FAILED_CONF_DIR.
 
@@ -266,6 +266,7 @@ class cerberus(app_manager.RyuApp):
         Args:
           ev: The event object.
         """
+        dp : controller.Datapath
         dp = ev.datapath
         ofproto: ofproto_v1_3 #type: ignore
         ofproto = dp.ofproto
@@ -276,20 +277,25 @@ class cerberus(app_manager.RyuApp):
         elif ev.reason == dp.ofproto.OFPPR_DELETE:
             reason = "been deleted"
         elif ev.reason == dp.ofproto.OFPPR_MODIFY:
-            port = dp.ports[port_no]
-            if port.state == ofproto.OFPPS_LINK_DOWN:
+            port = dp.ports[port_no] if port_no in dp.ports else None  # type: ignore
+            if port and port.state == ofproto.OFPPS_LINK_DOWN:
                 reason = "gone down"
-            elif port.state == ofproto.OFPPS_LIVE:
+            elif port and port.state == ofproto.OFPPS_LIVE:
                 reason = "gone up"
-            elif port.state == ofproto.OFPPS_BLOCKED:
+            elif port and port.state == ofproto.OFPPS_BLOCKED:
                 reason = "been blocked"
+            elif not port:
+                reason = f"been modified but had error finding port in dp.ports. {dp.ports}" #type: ignore
+                self.logger.debug(f"Datapath: {dp.id} the port {port_no} has "
+                                  f"{reason}")
+                return
             else:
                 reason = "been modified but state does not match ofproto port states"
 
         else:
             reason = (f"triggered a port state change but it was unknown, "
                       f"please check ev.reason dumped here: {ev.reason}")
-        self.logger.info(f"Datapath: {dp.id} the port port {port_no} has "
+        self.logger.info(f"Datapath: {dp.id} the port {port_no} has "
                          f"{reason}")
 
 
@@ -1234,7 +1240,7 @@ class cerberus(app_manager.RyuApp):
 
     def get_file_to_rollback_to(self, rollback_directory,
                                 rolling_back_to_last_running: bool = True,
-                                rollback_to_file: str = None):
+                                rollback_to_file: str = ""):
         try:
             filepath = ""
             if not self.rollback_files_exist(rollback_directory):
@@ -1735,7 +1741,7 @@ class cerberus(app_manager.RyuApp):
 ################################################################
 
     def config_hashes_matches(self, config: dict,
-                              old_config: dict = None) ->bool:
+                              old_config = None) ->bool:
         """ Transforms config to a hash and compare it with the existing one
 
         Args:
@@ -1927,10 +1933,13 @@ class cerberus(app_manager.RyuApp):
                          'dst' : ipv4_rules[0].dst,
                          'proto' : ipv4_rules[0].proto}
         if len(ipv6_rules) > 0:
-            ipv6_dict = {'src' : ipv6_rules[0].src,
-                         'dst' : ipv6_rules[0].dst}
             if len(icmpv6_rules) > 0:
-                ipv6_dict['icmpv6'] = [p.to_jsondict() for p in icmpv6_rules]
+                ipv6_dict = {'src' : ipv6_rules[0].src,
+                             'dst' : ipv6_rules[0].dst,
+                             'icmpv6' : [p.to_jsondict() for p in icmpv6_rules]}
+            else:
+                ipv6_dict = {'src' : ipv6_rules[0].src,
+                             'dst' : ipv6_rules[0].dst}
 
         packet_dict = {'time' : datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
                        'dp_id' : ev.msg.datapath.id,

@@ -40,6 +40,18 @@ def parse_args(sys_args):
         action='store_true',
         help='Runs in background with no output'
     )
+    args.add_argument(
+        '--wsapi-host',
+        dest='wsapi_host',
+        action='store',
+        help="webapp listen host (default 0.0.0.0)"
+    )
+    args.add_argument(
+        '--wsapi-port',
+        dest='wsapi_port',
+        action='store',
+        help="webapp listen host (default 8080)"
+    )
 
     return args.parse_args(sys_args)
 
@@ -56,7 +68,13 @@ def main():
     if args.version:
         print_version()
 
-    os.execvp('ryu-manager', ['ryu-manager', "cerberus.cerberus"])
+    ryu_args = []
+    if args.wsapi_host:
+       ryu_args.extend(["--wsapi-host", args.wsapi_host])
+    if args.wsapi_port:
+        ryu_args.extend(["--wsapi-port", args.wsapi_port])
+
+    os.execvp('ryu-manager', ['ryu-manager', *ryu_args ,'cerberus.cerberus'])
 
 
 if __name__ == '__main__':
